@@ -51,8 +51,8 @@ else
 		ifeq ($(OPTIMIZE),avx2)
 			COPTZ += -march=x86-64-v3
 		else
-			override OPTIMIZE := super-old
-			# default to a super old one (SSE4.2)
+			override OPTIMIZE := popcnt
+			# default to a super old one (POPCNT + SSE4.2)
 			COPTZ += -march=x86-64-v2
 		endif
 	endif

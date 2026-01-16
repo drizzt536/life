@@ -1,2 +1,5 @@
 # it is imperative that this file is LF and not CRLF
 data.json text eol=lf
+
+# for some reason, GitHub thinks these are C++ files
+/include/*.h linguist-language=C

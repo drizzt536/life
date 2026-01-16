@@ -1,5 +1,4 @@
 // compile with `make -B DEBUG=true CLIP=true TIMER=true NEIGHBORHOOD=MOORE RULESET=B3/S23 OPTIMIZE=avx2`
-// requires an MSVCRT version of GCC, despite not actually linking to MSVCRT.
 
 ///////////////////////////////// config start ////////////////////////////////
 
@@ -140,6 +139,8 @@
 #define ememcpy(dst, src, len) (__builtin_memcpy(dst, src, len) + len /* point to the end */)
 #define streq(x, y) (__builtin_strcmp(x, y) == 0)
 #define POPCNT(x) __builtin_stdc_count_ones(x)
+#define ROL(x, n) __builtin_stdc_rotate_left(x, n)
+#define ROR(x, n) __builtin_stdc_rotate_right(x, n)
 #define POP_ARG() (argc--, *argv++ /* return what was just popped */)
 #define TOSTRING(x) #x
 #define TOSTRING_EXPANDED(x) TOSTRING(x)
@@ -154,10 +155,10 @@
 // static branch prediction hinting is still used to build prof.exe.
 // NOTE: these default branch probability is 90%
 
-#define likely(x) __builtin_expect(!!(x), 1)
+#define likely(x)     __builtin_expect(!!(x), 1)
 #define likelyp(x, p) __builtin_expect_with_probability(!!(x), 1, p)
 
-#define unlikely(x) __builtin_expect(!!(x), 1)
+#define unlikely(x)     __builtin_expect(!!(x), 1)
 #define unlikelyp(x, p) __builtin_expect_with_probability(!!(x), 0, p)
 
 #define likely_if(x)       if (likely(x))
@@ -273,6 +274,8 @@ static const char *const help_string =
 	"\n    sim,sim1,nsim  runs simulations visually without statistics"
 	"\n    step           step to the next state and print out the result"
 	"\n                   takes an optional second operand for the number of steps"
+	"\n                   works both for forwards and backwards step sizes"
+	"\n                   if a negative size is given, it returns all solutions"
 	"\n"
 	"\n    dump           runs `./" PY_BASE ".py -s " DATAFILE "` and exit"
 	"\n    fold           runs `./" PY_BASE ".py -f " DATAFILE "` and exit"
@@ -366,6 +369,7 @@ static void bell(void) { likely_if (!silent) putchar('\x07'); }
 #include "summary.h"
 #include "sim.h"
 #include "run.h"
+#include "bw-step.h"
 
 #if DEBUG
 static void log_collisions(void) {
@@ -544,10 +548,11 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 			case '?':
 				goto help_flag;
 			case 'v':
+				// NOTE: this works because `help_string` starts with `"life v" VERSION`
 				if (!quiet)
-					puts("life v" VERSION);
+					printf("%.*s\n", 6 + (i32) __builtin_strlen(VERSION), help_string);
 				else likely_if (!silent)
-					puts(VERSION);
+					printf("%.*s\n", (i32) __builtin_strlen(VERSION), help_string + 6);
 				exit(0);
 			default:
 				goto flag_unknown;
@@ -651,7 +656,7 @@ void mainCRTStartup(void)
 
 	// NOTE: all the commands are at least 3 characters long, so if any of the
 	//       first 3 characters are null, then it is definitely not a known commands
-	unlikely_if (!argv[0][0] || !argv[0][1] || !argv[0][2])
+	unlikely_if (argv[0][0] == '\0' || argv[0][1] == '\0' || argv[0][2] == '\0')
 		goto unknown_command;
 
 	// the string is longer than 4 characters, so it is definitely unknown
@@ -707,7 +712,7 @@ void mainCRTStartup(void)
 			// run once for each state given
 			for (u32 i = 1; i < argc; i++) {
 				char *str_end;
-				Matx8 state = (Matx8) {.matx = strtoull(argv[i], &str_end, 0)};
+				Matx8 state = {.matx = strtoull(argv[i], &str_end, 0)};
 
 				if (*str_end != '\0') {
 					likely_if (!silent)
@@ -737,7 +742,7 @@ void mainCRTStartup(void)
 		// run once for each state given
 		for (u32 i = 1; i < argc; i++) {
 			char *str_end;
-			Matx8 state = (Matx8) {.matx = strtoull(argv[i], &str_end, 0)};
+			Matx8 state = {.matx = strtoull(argv[i], &str_end, 0)};
 
 			if (*str_end != '\0') {
 				eprintf("command `%s` given with an invalid value at position %u.\n", "sim", i);
@@ -773,7 +778,7 @@ void mainCRTStartup(void)
 		// argc == 2
 
 		char *str_end;
-		Matx8 state = (Matx8) {.matx = strtoull(argv[1], &str_end, 0)};
+		Matx8 state = {.matx = strtoull(argv[1], &str_end, 0)};
 
 		if (*str_end != '\0') {
 			eprintf("command `%s` given with an invalid value at position %u.\n", "sim1", 1);
@@ -838,7 +843,7 @@ void mainCRTStartup(void)
 
 		char *str_end;
 
-		Matx8 state = (Matx8) {.matx = strtoull(argv[1], &str_end, 0)};
+		Matx8 state = {.matx = strtoull(argv[1], &str_end, 0)};
 
 		if (*str_end != '\0') {
 			eprintf("command `%s` given with an invalid value at position %u.\n", "step", 1);
@@ -848,7 +853,9 @@ void mainCRTStartup(void)
 		if (argc == 2)
 			n = 1;
 		else {
-			// NOTE: negative numbers are bit cast to unsigned and will be very large.
+			// NOTE: strtoull is actually the exact same as strtoll
+			//       so passing in stuff like "-1" still works just fine.
+
 			n = strtoull(argv[2], &str_end, 0);
 
 			if (*str_end != '\0') {
@@ -857,16 +864,46 @@ void mainCRTStartup(void)
 			}
 		}
 
-		while (n --> 0)
-			state = Matx8_next(state);
+		if (n <= INT64_MAX) {
+			// positive step size
+			while (n --> 0)
+				state = Matx8_next(state);
 
-		likely_if (!silent)
-			printf("0x%016llx\n", state.matx);
+			likely_if (!silent)
+				printf("0x%016llx\n", state.matx);
 
-		if (!quiet) {
-			print_state(state);
-			putchar('\n');
+			if (!quiet) {
+				print_state(state);
+				putchar('\n');
+			}
+		} else {
+			// negative step size
+
+			if (n == 0)
+				// -0 only exists for floats.
+				__builtin_unreachable();
+
+			n = -n;
+
+			Matx8 *prev_states = (Matx8 *) malloc(2 * sizeof(Matx8)) + 1;
+			prev_states[-1].matx = 1; // 1 state
+			prev_states[0] = state;
+
+			while (n > 0) {
+				if (!quiet)
+					printf("%llu step%s remaining\n", n, "s" + (n == 1));
+
+				prev_states = advance_predecessors(prev_states);
+				n--;
+			}
+
+			const u64 prev_cnt = prev_states[-1].matx;
+
+			likely_if (!silent)
+				for (u64 i = 0; i < prev_cnt; i++)
+					printf("0x%016llx\n", prev_states[i].matx);
 		}
+
 		break;
 	}
 	case CHARS4_TO_U32('d', 'u', 'm', 'p'):

@@ -4,7 +4,8 @@ if __name__ == "__main__":
 	from sys import argv
 	argv = argv[1:] # ignore the path to this file
 
-	if argv[0] != "B3/S23":
+	if argv[0].upper() not in {"B3/S23", "B3/S32", "S23/B3", "S32/B3"} \
+		and argv[0] not in {"-b", "-s", "-tt1", "-tt2", "-h", "-?", "-help", "--help"}:
 		from sympy.logic.boolalg import (
 			POSform, SOPform, ANFform, And, Or, Xor, Not, to_nnf,
 			BooleanTrue as spTrue, BooleanFalse as spFalse
@@ -72,21 +73,21 @@ def stringify_expr(expr, parent=None) -> str:
 	else:
 		raise TypeError(f"unkown class in expression: {type(expr)}")
 
-def tb2expr(truth_bits: int) -> str:
+def tb2expr(ttbits: int) -> str:
 	"""
 	input is a 16-bit integer encoding the truth table.
-	for example, (truth_bits >> i) & 1 is the same as truth_table[i]
+	for example, (ttbits >> i) & 1 is the same as truth_table[i]
 	"""
 
 	minterms = []
 	truth_table = [0]*16 # start with all zeros
 
 	for i in range(16):
-		if truth_bits & 1:
+		if ttbits & 1:
 			minterms.append(i)
 			truth_table[i] = 1
 
-		truth_bits >>= 1
+		ttbits >>= 1
 
 	# state is called `_s` so it gets placed after n_bitN in reverse ordering.
 	vars = symbols("_s n2 n1 n0")
@@ -164,19 +165,47 @@ def str2expr(x: str) -> str:
 	return tb2expr(str2tb(x))
 
 if __name__ == "__main__":
-	if not argv or argv[0] in {"-h", "-?", "-help", "--help"}:
-		# birth and survive. no 8 or 9s are allowed
+	if argv:
+		arg0 = argv[0]
+
+	if not argv or arg0 in {"-h", "-?", "-help", "--help"}:
+		# birth and survive.
+		# no 9s are allowed. 8s should accompany 0s and vice versa
 		print(
-			"no life ruleset provided." \
-			"\nexample: `python gen-next-cond.py \"B347/S023\"`" \
+			"no ruleset or flag provided." \
+			"\nexample: `python gen-ruleset.py \"B347/S0238\"`" \
+			"\n" \
+			"\nuse '-b' before the ruleset to print the B truth table." \
+			"\nuse '-s' for the S truth table, and '-tt1' or '-tt2' for both." \
+			"\n'-tt1' gives a single truth table, and '-tt2' gives each separately."
 		)
 
-		exit(1)
+		exit(int(not argv))
 
-	if len(argv) > 1:
-		print("arguments after the first are ignored.")
+	if arg0 in {"-b", "-s", "-tt1", "-tt2"}:
+		if len(argv) == 1:
+			print(f"flag '{arg0}' given without a ruleset")
+			exit(1)
 
-	if argv[0].upper() in {"B3/S23", "B3/S32", "S23/B3", "S32/B3"}:
-		print("~n2 & n1 & (n0 | s)")
+		if len(argv) > 2:
+			print(f"arguments after the second are ignored.")
+
+		ttbits = str2tb(argv[1])
+
+		b = (ttbits & 1) << 8 | ttbits & 511
+		s = ttbits & (1 << 8) | ttbits >> 8
+
+		if arg0 == "-tt1":
+			print(f"0b{s << 9 | b:018b}")
+		else:
+			if arg0 in {"-b", "-tt2"}: print(f"0b{b:09b}")
+			if arg0 in {"-s", "-tt2"}: print(f"0b{s:09b}")
 	else:
-		print(str2expr(argv[0]))
+		# print the C condition expression
+		if len(argv) > 1:
+			print("arguments after the first are ignored.")
+
+		if arg0.upper() in {"B3/S23", "B3/S32", "S23/B3", "S32/B3"}:
+			print("~n2 & n1 & (n0 | s)")
+		else:
+			print(str2expr(arg0))

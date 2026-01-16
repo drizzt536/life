@@ -8,7 +8,7 @@
 # it works for sure with MinGW devkit 2.5 (GCC 15.2, binutils 2.45)
 # the MSYS2 version of GCC won't work because it is UCRT and not MSVCRT.
 
-VERSION := 1.0.0
+VERSION := 1.1.0
 
 CFLAGS     := -Werror -Wall -Wextra -Wno-parentheses -Wno-missing-profile -std=gnu23 \
 			-masm=intel -DPY_BASE=\"analyze\" -DVERSION=\"$(VERSION)\" -Iinclude
@@ -27,6 +27,8 @@ CFILES     := life.c $(wildcard ./include/*.h)
 
 CFLAGS_LIFE_O = -c -fprofile-use -nostdlib -ffreestanding $(CFLAGS) \
 	-DPY_VERSION="\"$$(python --version | tail -c +8)\"" $(COPTZ) $(CPROF_OPTZ)
+
+TRUTH_TABLE_CMD := $$(python ./gen-ruleset.py -tt2 '$(RULESET)' | awk 'BEGIN {ORS = " "} NR==1 {print "-DB_TT=" $$0} NR==2 {print "-DS_TT=" $$0; exit}')
 
 # configuration stuff:
 
@@ -156,7 +158,7 @@ req-gcc: req-linux req-binutils
 
 	echo "void main() {}" | gcc -x c -Wl,-s,--gc-sections - -o tmp.exe
 	@if ! grep -Fq msvcrt.dll tmp.exe; then     \
-		echo "rm tmp.exe";                      \
+		echo "rm -f tmp.exe";                   \
 		rm -f tmp.exe;                          \
 		echo "# GCC must be an MSVCRT version"; \
 		exit 2;                                 \
@@ -195,45 +197,60 @@ life.7z: life.exe life-launch.exe req-7z analyze.py req-linux
 	7z a -t7z -mx=9 -bso0 -bsp0 $@ life.exe life-launch.exe analyze.py
 
 	@zip=$$(stat -c %s life.7z);    \
-	main=$$(stat -c %s life.exe);   \
-	launch=$$(stat -c %s life.exe); \
-	awk "BEGIN {print \"# 7zip reduction: \" 100 - $$zip*100 / ($$main + $$launch) \"%\"}"
+	life=$$(stat -c %s life.exe);   \
+	launch=$$(stat -c %s life-launch.exe); \
+	awk "BEGIN {print \"# 7zip reduction: \" 100 - $$zip*100 / ($$life + $$launch) \"%\"}"
 
 ruleset.tmp: gen-ruleset.py req-python
 ifdef RULESET
 	python $< '$(RULESET)' > $@
 else
-ruleset.tmp: req-linux
+ruleset.tmp: req-linux req-python
 	@# the content doesn't matter, just the file has to exist.
 	touch $@
 endif
 
 init-crt.o: init-crt.nasm req-nasm req-binutils
 	nasm -fwin64 $< -o $@
+	@# only strip debug information. `-s` breaks it.
 	strip -S $@
 
 ifeq ($(PROFILE),false)
 
 life.o: $(CFILES) req-gcc ruleset.tmp
 	@# can't use `-ffreestanding` for some reason
-	gcc -c -nostdlib $(CFLAGS) -DPY_VERSION="\"$$(python --version | tail -c +8)\"" $(COPTZ) $< -o $@
+	truth_table=$(TRUTH_TABLE_CMD); \
+	gcc -c -nostdlib $(CFLAGS) $$truth_table -DPY_VERSION="\"$$(python --version | tail -c +8)\"" $(COPTZ) $< -o $@
 else
 prof.exe: init-crt.o $(CFILES) ruleset.tmp req-gcc
-	gcc -fprofile-generate -DPROFILING $(CFLAGS) $(COPTZ) $< life.c -o $@
+	truth_table=$(TRUTH_TABLE_CMD); \
+	gcc -fprofile-generate -DPROFILING $(CFLAGS) $$truth_table $(COPTZ) $< life.c -o $@
 
 life.gcda: prof.exe req-linux
-	./$< nrun 2500000
+ifeq ($(QUIET),true)
+	./$< -H nrun 2500000 &> /dev/null
+	./$< -H step 0x1fffffffffff7f00 -2 &> /dev/null
+	./$< -q step 0xffffffffffffffff -1 &> /dev/null
+else
+	./$< -H nrun 2500000
+	./$< -H step 0x1fffffffffff7f00 -2
+	./$< -q step 0xffffffffffffffff -1
+	./$< -v
+endif
+
 	mv prof-life.gcda $@
 
 life.o: $(CFILES) life.gcda ruleset.tmp req-gcc
 ifeq ($(OPTIMIZE),native)
 	@# this is only in this branch. the non-profiling branch can have the regular name
+	truth_table=$(TRUTH_TABLE_CMD); \
 	flags=$$(gcc -march=native -Q --help=target 2>/dev/null | awk '/enabled/ {print $$1}'); \
 	isa=$$(for f in AVX512 AVX2 AVX SSE4.2 SSE4.1 SSSE3 SSE3 SSE2; do echo "$$flags" | grep -iq $$f && { echo $$f; break; }; done); \
 	cpu=$$(wmic cpu get name | sed -n 2p | awk '{$$1=$$1; print}'); \
-	gcc $(CFLAGS_LIFE_O) -DOPTIMIZE="\"native (ISA='$$isa', CPU='$$cpu')\"" $< -o $@.tmp
+	gcc $(CFLAGS_LIFE_O) $$truth_table -DOPTIMIZE="\"native (ISA='$$isa', CPU='$$cpu')\"" $< -o $@.tmp
 else
-	gcc $(CFLAGS_LIFE_O) $< -o $@.tmp
+	truth_table=$(TRUTH_TABLE_CMD); \
+	gcc $(CFLAGS_LIFE_O) $$truth_table $< -o $@.tmp
 endif # optimize
 
 	objcopy $@.tmp --remove-section .pdata --remove-section .xdata $@
@@ -248,7 +265,7 @@ analyze.py: analysis.py req-linux req-python
 life.exe: init-crt.o life.o req-binutils req-vcbtools
 	ld $(LDFLAGS) init-crt.o life.o $(LDLIBS) -o $@
 ifneq ($(RESERVE),long)
-	editbin -nologo -heap:32768,4096 -stack:32768,4096 $@
+	editbin -nologo -stack:32768,4096 $@
 endif
 
 life.txt: life.exe req-binutils req-vcbtools
@@ -258,7 +275,7 @@ ifndef NO_VC
 	dumpbin -nologo -headers $< >> $@
 endif
 
-# wrapper program so double clicking from explorer does something other than exit.
+# wrapper program so double clicking from explorer does something other than exit immediately.
 
 life-launch.o: life-launch.nasm req-nasm req-binutils
 	nasm -fwin64 $< -o $@

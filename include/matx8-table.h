@@ -3,11 +3,11 @@
 #pragma once
 #define MATX8_TABLE_H
 
-#include "windows.h"     // stdbool.h, integer types
+#include "windows.h" // stdbool.h, integer types
 
-#define TABLE_NO_VALUE	(~0u)
-#define ARENA_NO_BUCKET	(~0u)
-#define ARENA_NO_NEXT	((~0u) - 1u)
+#define TABLE_NO_VALUE  (~0u)
+#define ARENA_NO_BUCKET (~0u)
+#define ARENA_NO_NEXT  ((~0u) - 1u)
 
 // NOTE: these trials were before the implementation of the arena. With
 //       arenas, I only tested it for single multiplication hashing, but
@@ -59,9 +59,9 @@ static FORCE_INLINE u32 Matx8__hash_u(u64 state) {
 #else
 #define SIP_HALF_ROUND(a, b, c, d, s, t)      \
 	a += b; c += d;                           \
-	b = __builtin_stdc_rotate_left(b, s) ^ a; \
-	d = __builtin_stdc_rotate_left(d, t) ^ c; \
-	a = __builtin_stdc_rotate_left(a, 32);
+	b = ROL(b, s) ^ a; \
+	d = ROL(d, t) ^ c; \
+	a = ROL(a, 32);
 
 #define SIP_SINGLE_ROUND(v0, v1, v2, v3)    \
 	SIP_HALF_ROUND(v0, v1, v2, v3, 13, 16); \
@@ -107,7 +107,7 @@ static FORCE_INLINE u64 Matx8__xroll_u(const u64 state, u8 x) {
 
 static FORCE_INLINE u64 Matx8__yroll_u(const u64 state, u8 y) {
 	// a positive roll rotates down (towards smaller bit indices).
-	return __builtin_stdc_rotate_right(state, (y & 7) << 3);
+	return ROR(state, (y & 7) << 3);
 }
 
 // matrix wrapper functions
@@ -128,7 +128,7 @@ static FORCE_INLINE Matx8 Matx8__yroll(const Matx8 this, u8 x) {
 
 // technically all the functions are public, but just don't use them.
 
-#define Matx8_hash(s) _Generic(s, Matx8: Matx8__hash, u64: Matx8__hash_u)(s)
+#define Matx8_hash(s)     _Generic(s, Matx8: Matx8__hash , u64: Matx8__hash_u)(s)
 #define Matx8_xroll(s, x) _Generic(s, Matx8: Matx8__xroll, u64: Matx8__xroll_u)(s, x)
 #define Matx8_yroll(s, x) _Generic(s, Matx8: Matx8__yroll, u64: Matx8__yroll_u)(s, x)
 
@@ -186,7 +186,7 @@ static Matx8 Matx8_random(void) {
 ///////////////////////////////// Table stuff /////////////////////////////////
 
 // each entry takes up a quarter of a cache line.
-typedef struct TableEntry {
+typedef struct {
 	Matx8 key; // the matrix. 8 bytes
 	u32 val;   // step index the state belongs to.
 	u32 next;  // arena id for the next entry in the linked list.
@@ -204,7 +204,7 @@ typedef union {
 	__attribute__((packed)) struct {
 		TableEntry buckets[TABLE_LEN];
 		TableEntry overflow_arena[ARENA_LEN];
-		u32 arena_pos;
+		u32 arena_pos; // next write index
 	};
 } __attribute__((aligned(64))) HashTable; // aligned to a cache line.
 
@@ -214,7 +214,9 @@ static HashTable hashtable = {0};
 static u64 total_collisions = 0;
 #endif
 
-static bool Table__add3(const Matx8 mat, const u32 val, const u32 /*hash*/ h) {
+static bool Table__add3(const Matx8 mat, const u32 val, const u32 h) {
+	// returns true if it is out of memory and false otherwise
+
 	if (hashtable.buckets[h].next == ARENA_NO_BUCKET) {
 		// no collision.
 		hashtable.buckets[h] = (TableEntry) {
@@ -256,7 +258,7 @@ static FORCE_INLINE bool Table__add2(const Matx8 mat, const u32 val) {
 }
 
 
-static u32 Table__get2(const Matx8 mat, u32 /*hash*/ h) {
+static u32 Table__get2(const Matx8 mat, u32 h) {
 	TableEntry *entry = hashtable.buckets + h;
 
 	if (entry->next == ARENA_NO_BUCKET)
@@ -284,15 +286,17 @@ static FORCE_INLINE u32 Table__get1(const Matx8 mat) {
 
 // NOTE: returns false if it succeeded, and true if it ran out of arena memory.
 #define Table_add(mat, val, h...) \
-	VA_IF(Table__add3(mat, val, h), Table__add2(mat, val), h)
+	VA_IF(Table__add3(mat, val, (h)), Table__add2(mat, val), h)
 
 // NOTE: it returns TABLE_NO_VALUE if the entry doesn't exist.
 //       a real value should not get that high, so it is fine.
 #define Table_get(mat, h...) \
-	VA_IF(Table__get2(mat, h), Table__get1(mat), h)
+	VA_IF(Table__get2(mat, (h)), Table__get1(mat), h)
 
 static void Table_clear(void) {
 	hashtable.arena_pos = 0;
+
+	_Static_assert((TABLE_LEN & 3) == 0, "TABLE_LEN must be a multiple of 4");
 
 	for (u32 i = 0; i < TABLE_LEN; i += 4) {
 		// only touch one cache line per iteration.

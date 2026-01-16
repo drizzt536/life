@@ -1,4 +1,4 @@
-// compile with `make -B DEBUG=true CLIP=true TIMER=true NEIGHBORHOOD=MOORE RULESET=B3/S23 OPTIMIZE=avx2`
+// compile with `make -B DEBUG=true CLIP=true TIMER=true NEIGHBORHOOD=MOORE RULESET=B3/S23 ISA=avx2`
 
 ///////////////////////////////// config start ////////////////////////////////
 
@@ -300,8 +300,8 @@ static const char *const help_string =
 	#ifdef PY_VERSION
 	"\n    PY_VERSION=\""	PY_VERSION "\""
 	#endif
-	#ifdef OPTIMIZE // the profiling version doesn't always have this
-	"\n    OPTIMIZE=\""		OPTIMIZE "\""
+	#ifdef ISA // the profiling version doesn't always have this
+	"\n    ISA=\""			ISA "\""
 	#endif
 	"\n    RULESET=\""		RULESET "\""
 	"\n    TABLE_BITS="		TOSTRING_EXPANDED(TABLE_BITS)

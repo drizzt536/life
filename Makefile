@@ -8,11 +8,11 @@
 # it works for sure with MinGW devkit 2.5 (GCC 15.2, binutils 2.45)
 # the MSYS2 version of GCC won't work because it is UCRT and not MSVCRT.
 
-VERSION := 1.1.0
+VERSION := 1.1.1
 
 CFLAGS     := -Werror -Wall -Wextra -Wno-parentheses -Wno-missing-profile -std=gnu23 \
 			-masm=intel -DPY_BASE=\"analyze\" -DVERSION=\"$(VERSION)\" -Iinclude
-COPTZ      := -Ofast -fdelete-dead-exceptions -ffinite-loops -fgcse-las -fgcse-sm \
+COPTZ      := -fdelete-dead-exceptions -ffinite-loops -fgcse-las -fgcse-sm \
 			-fipa-pta -fira-loop-pressure -flive-range-shrinkage -frename-registers \
 			-fshort-enums -ftree-loop-if-convert -ftree-vectorize -fvpt -fweb -fwrapv \
 			-fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-ident
@@ -36,24 +36,31 @@ ifdef NO_VC
 	override RESERVE := long
 endif
 
+ifeq (OPTIMIZE, size)
+	COPTZ += -Os
+else
+	# default to optimizing for speed
+	COPTZ += -Ofast
+endif
+
 # architecture to optimize for
-ifeq ($(OPTIMIZE),native)
+ifeq ($(ISA),native)
 	COPTZ += -march=native
 	# CFLAGS is updated for native later, except for if profiling is off
 
 	ifeq ($(PROFILE),false)
-		CFLAGS += -DOPTIMIZE=\"native\"
+		CFLAGS += -DISA=\"native\"
 	endif
 else
-	CFLAGS += -DOPTIMIZE=\"$(OPTIMIZE)\"
+	CFLAGS += -DISA=\"$(ISA)\"
 
-	ifeq ($(OPTIMIZE),avx512)
+	ifeq ($(ISA),avx512)
 		COPTZ += -march=x86-64-v4
 	else
-		ifeq ($(OPTIMIZE),avx2)
+		ifeq ($(ISA),avx2)
 			COPTZ += -march=x86-64-v3
 		else
-			override OPTIMIZE := popcnt
+			override ISA := popcnt
 			# default to a super old one (POPCNT + SSE4.2)
 			COPTZ += -march=x86-64-v2
 		endif
@@ -122,7 +129,9 @@ ifdef RULESET
 	CFLAGS += -DNEXT_COND="$$(cat ruleset.tmp)"
 endif
 
-all: requirements life.7z life.txt life-launch.txt
+ZIPFILE := life-v$(VERSION)-$(ISA).7z
+
+all: requirements $(ZIPFILE) life.txt life-launch.txt
 
 .PHONY: requirements req-7z req-nasm req-linux req-binutils req-gcc req-vcbtools req-python
 
@@ -193,13 +202,14 @@ ifndef NO_VC
 endif # no vc
 endif # require
 
-life.7z: life.exe life-launch.exe req-7z analyze.py req-linux
+$(ZIPFILE): life.exe life-launch.exe req-7z analyze.py req-linux
 	7z a -t7z -mx=9 -bso0 -bsp0 $@ life.exe life-launch.exe analyze.py
 
-	@zip=$$(stat -c %s life.7z);    \
-	life=$$(stat -c %s life.exe);   \
-	launch=$$(stat -c %s life-launch.exe); \
-	awk "BEGIN {print \"# 7zip reduction: \" 100 - $$zip*100 / ($$life + $$launch) \"%\"}"
+	@z=$$(stat -c %s $(ZIPFILE));     \
+	a=$$(stat -c %s analyze.py);      \
+	b=$$(stat -c %s life.exe);        \
+	c=$$(stat -c %s life-launch.exe); \
+	awk "BEGIN {print \"# 7zip reduction: \" 100 - $$z*100 / ($$a + $$b + $$c) \"%\"}"
 
 ruleset.tmp: gen-ruleset.py req-python
 ifdef RULESET
@@ -241,13 +251,13 @@ endif
 	mv prof-life.gcda $@
 
 life.o: $(CFILES) life.gcda ruleset.tmp req-gcc
-ifeq ($(OPTIMIZE),native)
+ifeq ($(ISA),native)
 	@# this is only in this branch. the non-profiling branch can have the regular name
 	truth_table=$(TRUTH_TABLE_CMD); \
 	flags=$$(gcc -march=native -Q --help=target 2>/dev/null | awk '/enabled/ {print $$1}'); \
 	isa=$$(for f in AVX512 AVX2 AVX SSE4.2 SSE4.1 SSSE3 SSE3 SSE2; do echo "$$flags" | grep -iq $$f && { echo $$f; break; }; done); \
 	cpu=$$(wmic cpu get name | sed -n 2p | awk '{$$1=$$1; print}'); \
-	gcc $(CFLAGS_LIFE_O) $$truth_table -DOPTIMIZE="\"native (ISA='$$isa', CPU='$$cpu')\"" $< -o $@.tmp
+	gcc $(CFLAGS_LIFE_O) $$truth_table -DISA="\"native (ISA='$$isa', CPU='$$cpu')\"" $< -o $@.tmp
 else
 	truth_table=$(TRUTH_TABLE_CMD); \
 	gcc $(CFLAGS_LIFE_O) $$truth_table $< -o $@.tmp
@@ -301,4 +311,4 @@ clean: req-linux
 	rm -f *.o *.tmp *.gcda prof.exe
 
 distclean: req-linux
-	rm -f *.o *.tmp *.gcda *.exe life.7z life.txt life-launch.txt analyze.py
+	rm -f *.o *.tmp *.gcda *.exe *.7z life.txt life-launch.txt analyze.py

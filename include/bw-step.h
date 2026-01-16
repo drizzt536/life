@@ -308,7 +308,7 @@ static u64 advance_ptlstate(Matx8 **const pout, const u64 old_cnt, const u64 new
 
 			#if DEBUG
 				if (!quiet) enprintf(
-					"doubling buffer size to 0x%llu MiB. old_cnt=%llu, idx=%llu",
+					"doubling buffer size to %llu MiB. old_cnt=%llu, idx=%llu",
 					out_size >> 20, old_cnt, idx
 				);
 			#endif

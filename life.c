@@ -1,5 +1,20 @@
 // compile with `make -B DEBUG=true CLIP=true TIMER=true NEIGHBORHOOD=MOORE RULESET=B3/S23 ISA=avx2`
 
+// I do not care that writing to u.x and then reading from u.y is not defined
+// for unions. C just reinterprets the bits as the other type with no change,
+// even if the standard doesn't technically guarantee that is what happens.
+
+// TODO: make a mode to search for number of predecessors in random states
+// TODO: in `step <state> <positive>, if the size is really large, then go until the
+//       first state, and modulo the remaining step count by the period. the
+//       threshold should be roughly 1000 steps. On my machine, it should theoretically
+//       be 353 steps, but I think 500-1000 is likely a better idea.
+// TODO: consider this idea: for reverse search, instead of adding everything to a
+//       running state array every time, do 2x2 grids separately, and then add them
+//       together into 4x4 grids, and then add those together as an 8x8 grid.
+//       I think this should reduce the amount of intermediate states needed.
+//       at each step, do `out = (UL ⋈ UR) ⋈ (DL ⋈ DR)` and recurse.
+
 ///////////////////////////////// config start ////////////////////////////////
 
 #ifndef ALIVE_CHAR_DEF
@@ -7,6 +22,13 @@
 #endif
 #ifndef DEAD_CHAR_DEF
 	#define DEAD_CHAR_DEF	' ' // character to print for  dead cells
+#endif
+
+#ifndef SLEEP_MS_T_DEF
+	#define SLEEP_MS_T_DEF	1500
+#endif
+#ifndef SLEEP_MS_S_DEF
+	#define SLEEP_MS_S_DEF	90
 #endif
 
 // period after which `nrun inf` logs the summary and resets.
@@ -116,6 +138,7 @@
 #define TRANSIENT_MAX (-1 + TRANSIENT_LEN)
 
 #ifndef PROFILING
+	#define PROFILING 0
 	// NOTE: the profiling mode is strange, because it automatically
 	//       links with msvcrt, and if you pass `-nostdlib -ffreestanding`,
 	//       then it just says it can't find any of the functions it needs,
@@ -202,10 +225,16 @@ typedef enum <% EMPTY, CONST, CYCLE %> sttyp_t; // state type
 
 // hashtable and total_collisions are defined in matx8-table.h now.
 
-// static HashTable hashtable        = {0};
-static u64 counts[3]                 = {0}; // EMPTY, CONST, CYCLE
-static u64 periods[PERIOD_LEN]       = {0};
-static u64 transients[TRANSIENT_LEN] = {0};
+// static HashTable hashtable = {0};
+static union {
+	u64 combined[PERIOD_LEN + TRANSIENT_LEN + 3];
+
+	__attribute__((packed)) struct {
+		u64 periods[PERIOD_LEN];
+		u64 transients[TRANSIENT_LEN];
+		u64 counts[3]; // EMPTY, CONST, CYCLE
+	};
+} __attribute__((aligned(64))) data = {0};
 
 #if DEBUG
 static u64 max_collisions_state = 0; // the state with the most hash collisions
@@ -213,22 +242,33 @@ static u32 max_collisions       = 0; // max collisions in a single trial
 // static u64 total_collisions  = 0; // total collisions across all trials
 #endif
 
+static struct {
+	// these pairs are unions so I don't have to make the
+	// struct packed and do extra stuff to make it work
+
+	union {
+		struct { u32 trial, state; };   // 8 bytes
+		u32 array[2];
+	} sleep_ms;
+
+	union {
+		struct { u8 stop, update; };    // 2 bytes
+		u8 array[2];
+	} keys;
+
+	union {
+		struct { char dead, alive; };   // 2 bytes
+		char array[2];
+	} sim_chars;
+
+	bool file_out, bell, silent, quiet; // 4 bytes
 #if CLIPBOARD
-static bool copy       = false;
+	bool clip;                          // 1 byte
 #endif
-
-static bool usefile    = false;
-static bool usebell    = false;
-static bool silent     = false;
-static bool quiet      = false;
-static u8 stop_key     = VK_F1;
-static u8 update_key   = VK_INSERT;
-static char alive_char = ALIVE_CHAR_DEF;
-static char dead_char  =  DEAD_CHAR_DEF;
-
-static u32 sleep_ms[2] = {
-	1500, // sleep time in between each trial in the sim commands
-	90    // sleep time in between each state in the sim commands
+} cfg = {
+	.sleep_ms  = {.trial = SLEEP_MS_T_DEF, .state  = SLEEP_MS_S_DEF},
+	.keys      = {.stop  = VK_F1,          .update = VK_INSERT     },
+	.sim_chars = {.alive = ALIVE_CHAR_DEF, .dead   = DEAD_CHAR_DEF },
 };
 
 #if HELP
@@ -237,20 +277,20 @@ static const char *const help_string =
 	"\nusage: life [FLAGS] COMMAND [OPERANDS]"
 	"\n"
 	"\nflags:"
+	"\n    -a   specify a character to print for dead cells in sim modes."
+	"\n    -d   specify a character to print for alive cells in sim modes."
+	"\n    -b   print a bell character when the program exits."
 #if CLIPBOARD
 	"\n    -c   in run modes, copy the summary to the clipboard as well as printing."
 #endif
 	"\n    -f   in run modes, concatenate the summary data together into " DATAFILE "."
+	"\n    -H   use HIGH process priority class."
 	"\n    -q   quiet mode. suppresses most non-error output messages."
 	"\n    -Q   silent mode. suppresses all terminal output including error messages."
 	"\n    -s   specify a key code to stop in `nrun inf` `nsim inf`, and `sim1`."
 	"\n    -u   specify a key code to update the user in `nrun inf`."
-	"\n    -T   specify a wait in ms between trials in sim modes. default=1500."
-	"\n    -S   specify a wait in ms between states in sim modes. default=90."
-	"\n    -a   specify a character to print for dead cells in sim modes."
-	"\n    -d   specify a character to print for alive cells in sim modes."
-	"\n    -b   print a bell character when the program exits."
-	"\n    -H   use HIGH process priority class."
+	"\n    -S   specify a wait in ms between states in sim modes. default=" TOSTRING_EXPANDED(SLEEP_MS_S_DEF) "."
+	"\n    -T   specify a wait in ms between trials in sim modes. default=" TOSTRING_EXPANDED(SLEEP_MS_T_DEF) "."
 	"\n    -v   print the version string and exit."
 	"\n    -h, -?, --help   print this message and exit"
 	"\n"
@@ -319,13 +359,12 @@ static const char *const help_string =
 	"\n    DEBUG="			TOSTRING_EXPANDED(DEBUG)
 	"\n"
 	"\nexit codes:"
-	"\n    1  [unused]"
-	"\n    2  [unused]"
 	"\n    3  could not perform an operation on the datafile for an unknown reason"
 	"\n    4  command given with invalid arguments or the wrong amount of arguments"
 	"\n    5  flag given with invalid arguments or the wrong amount of arguments"
 	"\n    6  an unknown or empty command was given"
 	"\n    7  an unknown or empty flag was given"
+	"\n   12  program is out of heap memory"
 	"\n"
 	"\nstate interest bit meanings (for run modes):"
 	"\n    7  end state is not empty and is a perfect inverse of the start state"
@@ -342,7 +381,7 @@ static const char *const help_string = "help text was not included in this build
 
 __attribute__((optimize("unroll-loops")))
 static FORCE_INLINE void print_table_headers(void) {
-	if (quiet)
+	if (cfg.quiet)
 		return;
 
 #if INT_LEN(PERIOD_LEN) == 3 && INT_LEN(TRANSIENT_LEN) == 3
@@ -362,18 +401,18 @@ static FORCE_INLINE void print_table_headers(void) {
 #endif
 }
 
-static void show_cursor(void) { likely_if (!silent) printf("\e[?25h"); }
-static void bell(void) { likely_if (!silent) putchar('\x07'); }
+static void show_cursor(void) { likely_if (!cfg.silent) printf("\e[?25h"); }
+static void bell(void) { likely_if (!cfg.silent) putchar('\x07'); }
 
 #include "du64.h"
 #include "summary.h"
 #include "sim.h"
 #include "run.h"
-#include "bw-step.h"
+#include "bw-search.h"
 
 #if DEBUG
 static void log_collisions(void) {
-	if (quiet || total_collisions == 0)
+	if (cfg.quiet || total_collisions == 0)
 		return;
 
 	printf("hash collisions: total="); print_du64(total_collisions, '_');
@@ -417,21 +456,21 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 
 			switch (fc) {
 			case 'Q':
-				silent  = true;
+				cfg.silent   = true;
 				ERRLOG_LEVEL = ERRLOG_NONE;
 				FALLTHROUGH; // also set quiet to true
-			case 'q': quiet   = true; break;
-			case 'b': usebell = true; break;
-			case 'f': usefile = true; break;
+			case 'q': cfg.quiet    = true; break;
+			case 'b': cfg.bell     = true; break;
+			case 'f': cfg.file_out = true; break;
 			#if CLIPBOARD
-			case 'c': copy    = true; break;
+			case 'c': cfg.clip     = true; break;
 			#endif
 			case 'T': FALLTHROUGH;
 			case 'S': {
 				if (operand == NULL)
 					goto flag_no_operand;
 
-				u32 *const pvar = sleep_ms + (fc == 'S');
+				u32 *const pvar = cfg.sleep_ms.array + (fc == 'S');
 
 				char *arg_end;
 				const u64 tmp = strtoull(operand, &arg_end, 0);
@@ -448,7 +487,8 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 				if (operand == NULL)
 					goto flag_no_operand;
 
-				u8 *const pkey = fc == 's' ? &stop_key : &update_key;
+				u8 *const pkey = cfg.keys.array + (fc == 'u');
+				// u8 *const pkey = fc == 'u' ? &cfg.keys.update : &cfg.keys.stop;
 
 				// allow strings top row keys and some software-only keys
 				likely_if (operand[0] == 'f' && operand[1] && !operand[2]) {
@@ -528,7 +568,7 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 			}
 			case 'a': FALLTHROUGH;
 			case 'd': {
-				char *const pchar = fc == 'a' ? &alive_char : &dead_char;
+				char *const pchar = cfg.sim_chars.array + (fc == 'a');
 
 				if (operand == NULL)
 					goto flag_no_operand;
@@ -549,9 +589,9 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 				goto help_flag;
 			case 'v':
 				// NOTE: this works because `help_string` starts with `"life v" VERSION`
-				if (!quiet)
+				if (!cfg.quiet)
 					printf("%.*s\n", 6 + (i32) __builtin_strlen(VERSION), help_string);
-				else likely_if (!silent)
+				else likely_if (!cfg.silent)
 					printf("%.*s\n", (i32) __builtin_strlen(VERSION), help_string + 6);
 				exit(0);
 			default:
@@ -565,7 +605,7 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 	return true;
 
 help_flag:
-	likely_if (!silent)
+	likely_if (!cfg.silent)
 		puts(help_string);
 	exit(0);
 
@@ -597,7 +637,7 @@ flag_unknown:
 
 void init_crt(void);
 
-#ifdef PROFILING
+#if PROFILING
 int main(void)
 #else
 // profiling for the main function is discarded because I couldn't get it to work.
@@ -614,8 +654,8 @@ void mainCRTStartup(void)
 		"mov %0, edi\n\t"
 		"mov %1, rsi"
 		: "=r"(argc), "=r"(argv)
-		: // no outputs
-		: "rax", "rcx", "rdx", "r8", "r9", "rdi", "rsi", "memory"
+		: // no inputs
+		: "rax", "rcx", "rdx", "r8", "r9", "rdi", "rsi", "cc", "memory"
 	);
 
 	POP_ARG(); // the executable path is not needed.
@@ -636,13 +676,13 @@ void mainCRTStartup(void)
 		}
 		else {
 			// no arguments given. just print the help text.
-			likely_if (!silent)
+			likely_if (!cfg.silent)
 				puts(help_string);
 			exit(0);
 		}
 	} while (false);
 
-	if (_isatty(1) && likely(!silent)) {
+	if (_isatty(1) && likely(!cfg.silent)) {
 		printf("\e[0m\e[?25l"); // remove terminal styling if there is any and hide the cursor.
 		atexit(&show_cursor);
 	}
@@ -651,7 +691,7 @@ void mainCRTStartup(void)
 	atexit(&log_collisions);
 #endif
 
-	if (usebell)
+	if (cfg.bell)
 		atexit(&bell);
 
 	// NOTE: all the commands are at least 3 characters long, so if any of the
@@ -715,7 +755,7 @@ void mainCRTStartup(void)
 				Matx8 state = {.matx = strtoull(argv[i], &str_end, 0)};
 
 				if (*str_end != '\0') {
-					likely_if (!silent)
+					likely_if (!cfg.silent)
 						putchar('\n');
 					eprintf("command `%s` given with an invalid value at position %u.\n", "run", i);
 					exit(4);
@@ -733,7 +773,7 @@ void mainCRTStartup(void)
 		unlikely_if (argc == 1) {
 			cli_sim(1);
 		#if DEBUG
-			if (!quiet)
+			if (!cfg.quiet)
 				putchar('\n');
 		#endif
 			exit(0);
@@ -749,15 +789,15 @@ void mainCRTStartup(void)
 				exit(4);
 			}
 
-			cli_sim((u64) i, state);
+			cli_sim(i, state);
 
 			unlikely_if (i != argc - 1)
 				// don't sleep after the last iteration
-				Sleep(sleep_ms[0]);
+				Sleep(cfg.sleep_ms.trial);
 		}
 
 		#if DEBUG
-		if (!quiet)
+		if (!cfg.quiet)
 			putchar('\n');
 		#endif
 		break;
@@ -793,13 +833,12 @@ void mainCRTStartup(void)
 			__builtin_unreachable();
 
 		likely_if (argc == 2) {
-			// life [FLAGS] nsim ARG
 			likely_if (streq(argv[1], "inf")) {
 				u64 trial = 0;
 
 				while (true) {
 					if (trial)
-						Sleep(sleep_ms[0]);
+						Sleep(cfg.sleep_ms.trial);
 
 					cli_sim(++trial);
 				}
@@ -821,14 +860,14 @@ void mainCRTStartup(void)
 
 		for (u32 i = 1; i < n; i++) {
 			cli_sim(i);
-			Sleep(sleep_ms[0]);
+			Sleep(cfg.sleep_ms.trial);
 		}
 
 		// do the last simulation without a sleep after it.
 		cli_sim(n);
 
 		#if DEBUG
-		if (!quiet)
+		if (!cfg.quiet)
 			putchar('\n');
 		#endif
 		break;
@@ -869,10 +908,10 @@ void mainCRTStartup(void)
 			while (n --> 0)
 				state = Matx8_next(state);
 
-			likely_if (!silent)
+			likely_if (!cfg.silent)
 				printf("0x%016llx\n", state.matx);
 
-			if (!quiet) {
+			if (!cfg.quiet) {
 				print_state(state);
 				putchar('\n');
 			}
@@ -890,7 +929,7 @@ void mainCRTStartup(void)
 			prev_states[0] = state;
 
 			while (n > 0) {
-				if (!quiet)
+				if (!cfg.quiet)
 					printf("%llu step%s remaining\n", n, "s" + (n == 1));
 
 				prev_states = advance_predecessors(prev_states);
@@ -899,7 +938,7 @@ void mainCRTStartup(void)
 
 			const u64 prev_cnt = prev_states[-1].matx;
 
-			likely_if (!silent)
+			likely_if (!cfg.silent)
 				for (u64 i = 0; i < prev_cnt; i++)
 					printf("0x%016llx\n", prev_states[i].matx);
 		}
@@ -1010,12 +1049,12 @@ void mainCRTStartup(void)
 			exit(3);
 		}
 
-		likely_if (!silent)
-			printf(quiet ? "%u\n" : "found %u objects\n", objects);
+		likely_if (!cfg.silent)
+			printf(cfg.quiet ? "%u\n" : "found %u objects\n", objects);
 		break;
 	}
 	case CHARS4_TO_U32('h', 'e', 'l', 'p'):
-		likely_if (!silent)
+		likely_if (!cfg.silent)
 			puts(help_string);
 		break;
 	default:

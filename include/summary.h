@@ -87,32 +87,32 @@ static char *sprintf_summary(char *buf) {
 	BUF_WRITE(buf, "{\n\t\"hcollide\": {\"count\": 0, \"states\": [\"0x0000000000000000\"]},"
 		"\n\t\"trials\": \"");
 #endif
-	BUF_WRITE(buf, counts[EMPTY] + counts[CONST] + counts[CYCLE]);
+	BUF_WRITE(buf, data.counts[EMPTY] + data.counts[CONST] + data.counts[CYCLE]);
 
-	BUF_WRITE(buf, "\",\n\t\"counts\": {\"empty\": \""); BUF_WRITE(buf, counts[EMPTY]);
-	BUF_WRITE(buf, "\", \"const\": \"");                 BUF_WRITE(buf, counts[CONST]);
-	BUF_WRITE(buf, "\", \"cycle\": \"");                 BUF_WRITE(buf, counts[CYCLE]);
+	BUF_WRITE(buf, "\",\n\t\"counts\": {\"empty\": \""); BUF_WRITE(buf, data.counts[EMPTY]);
+	BUF_WRITE(buf, "\", \"const\": \"");                 BUF_WRITE(buf, data.counts[CONST]);
+	BUF_WRITE(buf, "\", \"cycle\": \"");                 BUF_WRITE(buf, data.counts[CYCLE]);
 
 	BUF_WRITE(buf, "\"},\n\t\"periods\": {");
 	// this stuff compiles to AVX512 instructions if they are available.
 	{
 		u32 max_period = 0;
 		for (u32 i = PERIOD_MAX; i --> 0 ;)
-			if (periods[i] != 0) {
+			if (data.periods[i] != 0) {
 				max_period = i;
 				break;
 			}
 
 		for (u32 i = 0; i < PERIOD_MAX; i++) {
 			unlikely_if (i == max_period) {
-				BUF_WRITE(buf, "\"%u\": %llu", i, periods[i]);
+				BUF_WRITE(buf, "\"%u\": %llu", i, data.periods[i]);
 				break;
 			}
 
-			if (periods[i] == 0)
+			if (data.periods[i] == 0)
 				continue;
 
-			BUF_WRITE(buf, "\"%u\": %llu", i, periods[i]);
+			BUF_WRITE(buf, "\"%u\": %llu", i, data.periods[i]);
 			BUF_WRITE(buf, ',', ' ');
 		}
 	} // end bare block
@@ -121,21 +121,21 @@ static char *sprintf_summary(char *buf) {
 	{
 		u32 max_transient = 0;
 		for (u32 i = TRANSIENT_MAX; i --> 0 ;)
-			if (transients[i] != 0) {
+			if (data.transients[i] != 0) {
 				max_transient = i;
 				break;
 			}
 
 		for (u32 i = 0; i < TRANSIENT_MAX; i++) {
 			unlikely_if (i == max_transient) {
-				BUF_WRITE(buf, "\"%u\": %llu", i, transients[i]);
+				BUF_WRITE(buf, "\"%u\": %llu", i, data.transients[i]);
 				break;
 			}
 
-			if (transients[i] == 0)
+			if (data.transients[i] == 0)
 				continue;
 
-			BUF_WRITE(buf, "\"%u\": %llu", i, transients[i]);
+			BUF_WRITE(buf, "\"%u\": %llu", i, data.transients[i]);
 			BUF_WRITE(buf, ',', ' ');
 		}
 	} // end bare block
@@ -148,8 +148,8 @@ static void give_summary(const bool returns) {
 	char *const buf_stt = hashtable.scratch;
 	char *buf_end = sprintf_summary(buf_stt);
 
-	likely_if (!silent) {
-		if (quiet)
+	likely_if (!cfg.silent) {
+		if (cfg.quiet)
 			printf("\r\e[0K");
 		else
 			puts("\nSummary:");
@@ -161,7 +161,7 @@ static void give_summary(const bool returns) {
 	u64 len = buf_end - buf_stt;
 
 #if CLIPBOARD
-	if (copy && !returns) {
+	if (cfg.clip && !returns) {
 		// never copy to the clipboard if the function will be returning for a few reasons:
 		// 1. I don't want to have to DLL import the mutex and clipboard closing functions
 		// 2. it would be really bad UX if randomly every 12 hours your clipboard is
@@ -228,7 +228,7 @@ static void give_summary(const bool returns) {
 		// ReleaseMutex(mutex);
 		// CloseHandle(mutex);
 	#if DEBUG
-		likely_if (!silent)
+		likely_if (!cfg.silent)
 			printf("summary written to %s.\n", "clipboard");
 	#endif
 
@@ -236,7 +236,7 @@ static void give_summary(const bool returns) {
 	}
 #endif // CLIPBOARD
 
-	if (usefile) {
+	if (cfg.file_out) {
 		BUF_WRITE(buf_end, '\n', ']', '\n', '\0'); buf_end--;
 		len += __builtin_strlen("\n]\n");
 
@@ -278,7 +278,7 @@ static void give_summary(const bool returns) {
 			// the local jump is faster than the DLL syscall if the syscall isn't needed
 			_close(fd);
 	#if DEBUG
-		likely_if (!silent)
+		likely_if (!cfg.silent)
 			printf("summary written to %s.\n", DATAFILE);
 	#endif
 	}

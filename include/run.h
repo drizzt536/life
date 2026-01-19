@@ -14,11 +14,11 @@ static void log_if_interesting(Matx8 s0, Matx8 s1, sttyp_t type, u32 step, u32 p
 	static u8 b4 = 5, b32 = 5;
 
 	// rare but not new transient value.
-	unlikely_if (transients[step] < 2 && transients[step] > 0)
+	unlikely_if (data.transients[step] < 2 && data.transients[step] > 0)
 		interest |= 1 << 0; // 1
 
 	// rare but not new period value
-	unlikely_if (periods[period] < 2 && periods[period] > 0)
+	unlikely_if (data.periods[period] < 2 && data.periods[period] > 0)
 		interest |= 1 << 1; // 2
 
 	// a lot of states before the loop, and a loop
@@ -29,11 +29,11 @@ static void log_if_interesting(Matx8 s0, Matx8 s1, sttyp_t type, u32 step, u32 p
 	}
 
 	// new transient value
-	unlikely_if (transients[step] == 0)
+	unlikely_if (data.transients[step] == 0)
 		interest |= 1 << 3; // 8
 
 	// new period value
-	unlikely_if (periods[period] == 0)
+	unlikely_if (data.periods[period] == 0)
 		interest |= 1 << 4; // 16
 
 	// constant end state and slightly less than half of the states
@@ -64,19 +64,20 @@ static void log_if_interesting(Matx8 s0, Matx8 s1, sttyp_t type, u32 step, u32 p
 	struct _timespec64 ts = {0};
 
 #ifdef PROFILING
+	// profiling is forced into using MSVCRT, which doesn't have `timespec_get`,
+	// so I have to just get rid of that part.
 	// the same length as the call, just so profiling will still work.
 	asm volatile ( // 13 byte NOP
 		".fill 12, 1, 0x66\n\t" // o16 prefix, with 11 more redundant copies.
 		".byte 0x90\n\t" // one byte nop
 	);
 #else
-	// profiling is forced into using MSVCRT, which doesn't have `timespec_get`,
-	// so I have to just get rid of that part.
 	_timespec64_get(&ts, TIME_UTC);
 #endif
 
 	struct tm *tm = _localtime64(&ts.tv_sec);
 
+	// TODO: perhaps move this into the help text somewhere
 	/**
 	 * timestamp prints in big to small (DAY-HH:MM:SS.0MS)
 	 * everything is left-padded with zeros.
@@ -166,7 +167,7 @@ static void log_if_interesting(Matx8 s0, Matx8 s1, sttyp_t type, u32 step, u32 p
 		printf( "  | ");
 
 	// print the trial number last because it will mess up the columns otherwise.
-	print_du64(counts[EMPTY] + counts[CONST] + counts[CYCLE]);
+	print_du64(data.counts[EMPTY] + data.counts[CONST] + data.counts[CYCLE]);
 }
 
 static void _run_once1(const Matx8 start_state) {
@@ -220,14 +221,14 @@ static void _run_once1(const Matx8 start_state) {
 	sttyp_t type = state.matx == 0 ? EMPTY : period == 1 ? CONST : CYCLE;
 
 	// update this one first so the logs work properly.
-	++counts[type];
+	++data.counts[type];
 
-	likely_if (!quiet)
+	likely_if (!cfg.quiet)
 		log_if_interesting(start_state, state, type, step, period);
 
 	// update the global data
-	++transients[step];
-	++periods[period];
+	++data.transients[step];
+	++data.periods[period];
 
 #if DEBUG
 	if (hashtable.arena_pos > max_collisions) {
@@ -270,23 +271,23 @@ start:
 			}
 
 			// if you are pressing both keys, print the trial first and then exit.
-			unlikelyp_if (GetAsyncKeyState(update_key) & 0x8000, 0.999999) {
-				if (!update_pressed && likely(!silent)) {
-					putchar(quiet ? '\r' : '\n');
+			unlikelyp_if (GetAsyncKeyState(cfg.keys.update) & 0x8000, 0.999999) {
+				if (!update_pressed && likely(!cfg.silent)) {
+					putchar(cfg.quiet ? '\r' : '\n');
 					printf("trial: ");
-					print_du64(counts[EMPTY] + counts[CONST] + counts[CYCLE]);
+					print_du64(data.counts[EMPTY] + data.counts[CONST] + data.counts[CYCLE]);
 				}
 
 				update_pressed = true;
 			} else
 				update_pressed = false;
 
-			unlikelyp_if (GetAsyncKeyState(stop_key) & 0x8000, 0.9999)
+			unlikelyp_if (GetAsyncKeyState(cfg.keys.stop) & 0x8000, 0.9999)
 				return;
 	#if TIMER
 		} // for, j
 
-		if (!usefile)
+		if (!cfg.file_out)
 			// only do the timer in the first place for file output.
 			continue;
 
@@ -298,30 +299,30 @@ start:
 			give_summary(true); // returning version of the function. never uses the clipboard
 			Table_clear();
 
-			counts[EMPTY] = 0;
-			counts[CONST] = 0;
-			counts[CYCLE] = 0;
+			data.counts[EMPTY] = 0;
+			data.counts[CONST] = 0;
+			data.counts[CYCLE] = 0;
 
 			_Static_assert(PERIOD_LEN < TRANSIENT_LEN, "PERIOD_LEN < TRANSIENT_LEN");
 
 			for (u32 pos = 0; pos < PERIOD_LEN; pos += 4) {
-				periods[pos | 0] = 0;
-				periods[pos | 1] = 0;
-				periods[pos | 2] = 0;
-				periods[pos | 3] = 0;
+				data.periods[pos | 0] = 0;
+				data.periods[pos | 1] = 0;
+				data.periods[pos | 2] = 0;
+				data.periods[pos | 3] = 0;
 			}
 
 			for (u32 pos = 0; pos < TRANSIENT_LEN; pos += 4) {
-				transients[pos | 0] = 0;
-				transients[pos | 1] = 0;
-				transients[pos | 2] = 0;
-				transients[pos | 3] = 0;
+				data.transients[pos | 0] = 0;
+				data.transients[pos | 1] = 0;
+				data.transients[pos | 2] = 0;
+				data.transients[pos | 3] = 0;
 			}
 
 			enputs("More than " TOSTRING_EXPANDED(TIMER_PERIOD)
 				" seconds have passed since timer last check. restarting.");
 
-			if (unlikely(usebell) && likely(!silent))
+			if (unlikely(cfg.bell) && likely(!cfg.silent))
 				putchar('\x07'); // bell
 
 			goto start;

@@ -8,10 +8,10 @@
 # it works for sure with MinGW devkit 2.5 (GCC 15.2, binutils 2.45)
 # the MSYS2 version of GCC won't work because it is UCRT and not MSVCRT.
 
-VERSION := 1.1.1
+VERSION := 1.2.0
 
 CFLAGS     := -Werror -Wall -Wextra -Wno-parentheses -Wno-missing-profile -std=gnu23 \
-			-masm=intel -DPY_BASE=\"analyze\" -DVERSION=\"$(VERSION)\" -Iinclude
+			-Iinclude -masm=intel -DPY_BASE=\"analyze\" -DVERSION=\"$(VERSION)\"
 COPTZ      := -fdelete-dead-exceptions -ffinite-loops -fgcse-las -fgcse-sm \
 			-fipa-pta -fira-loop-pressure -flive-range-shrinkage -frename-registers \
 			-fshort-enums -ftree-loop-if-convert -ftree-vectorize -fvpt -fweb -fwrapv \
@@ -28,7 +28,7 @@ CFILES     := life.c $(wildcard ./include/*.h)
 CFLAGS_LIFE_O = -c -fprofile-use -nostdlib -ffreestanding $(CFLAGS) \
 	-DPY_VERSION="\"$$(python --version | tail -c +8)\"" $(COPTZ) $(CPROF_OPTZ)
 
-TRUTH_TABLE_CMD := $$(python ./gen-ruleset.py -tt2 '$(RULESET)' | awk 'BEGIN {ORS = " "} NR==1 {print "-DB_TT=" $$0} NR==2 {print "-DS_TT=" $$0; exit}')
+TRUTH_TABLE_CMD := $$(python ./gen-ruleset.py -tt2 '$(RULESET)' | awk 'BEGIN {ORS = " "} NR==1 {print "-DB_TT=" $$0 "u"} NR==2 {print "-DS_TT=" $$0 "u"; exit}')
 
 # configuration stuff:
 
@@ -234,19 +234,25 @@ life.o: $(CFILES) req-gcc ruleset.tmp
 else
 prof.exe: init-crt.o $(CFILES) ruleset.tmp req-gcc
 	truth_table=$(TRUTH_TABLE_CMD); \
-	gcc -fprofile-generate -DPROFILING $(CFLAGS) $$truth_table $(COPTZ) $< life.c -o $@
+	gcc -fprofile-generate -DPROFILING=1 $(CFLAGS) $$truth_table $(COPTZ) $< life.c -o $@
 
+# TODO: find a state that actually does have a second level predecessor state.
 life.gcda: prof.exe req-linux
 ifeq ($(QUIET),true)
 	./$< -H nrun 2500000 &> /dev/null
 	./$< -H step 0x1fffffffffff7f00 -2 &> /dev/null
 	./$< -q step 0xffffffffffffffff -1 &> /dev/null
+	./$<    step 0xb9078411668e300d 423 &> /dev/null
+	./$< -v &> /dev/null
 else
 	./$< -H nrun 2500000
 	./$< -H step 0x1fffffffffff7f00 -2
 	./$< -q step 0xffffffffffffffff -1
+	./$<    step 0xb9078411668e300d 423
 	./$< -v
 endif
+	@# just spam a bunch of flags to get profiling data on them
+	./$< -adfsSTuh '.' '#' f1 0 62 f2 &> /dev/null
 
 	mv prof-life.gcda $@
 

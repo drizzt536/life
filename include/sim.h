@@ -27,7 +27,7 @@ static void print_state(const Matx8 state) {
 
 		for (u8 col = 8; col --> 0 ;) {
 			putchar(' ');
-			putchar((state.rows[row] >> col) & 1 ? alive_char : dead_char);
+			putchar((state.rows[row] >> col) & 1 ? cfg.sim_chars.alive : cfg.sim_chars.dead);
 		}
 
 		unlikelyp_if (row, 0.875)
@@ -41,16 +41,16 @@ static void _cli_sim2(const u64 trial, const Matx8 start_state) {
 
 	Table_clear();
 
-	unlikely_if (silent) {
+	unlikely_if (cfg.silent) {
 		do {
-			Sleep(sleep_ms[1]);
+			Sleep(cfg.sleep_ms.state);
 
 			if (unlikelyp(Table_get(state) != TABLE_NO_VALUE, 0.97129) ||
 				unlikelyp(Table_add(state, 0), 0.999999))
 				return;
 
 			state = Matx8_next(state);
-		} until (GetAsyncKeyState(stop_key) & 0x8000);
+		} until (GetAsyncKeyState(cfg.keys.stop) & 0x8000);
 
 		return;
 	}
@@ -64,7 +64,7 @@ static void _cli_sim2(const u64 trial, const Matx8 start_state) {
 	step = 0;
 
 	do {
-		Sleep(sleep_ms[1]);
+		Sleep(cfg.sleep_ms.state);
 		h = Matx8_hash(state);
 		table_value = Table_get(state, h);
 
@@ -86,7 +86,7 @@ static void _cli_sim2(const u64 trial, const Matx8 start_state) {
 		// than whatever is printed currently.
 		printf("\e[Hstate %3u:          \n", step);
 		print_state(state);
-	} until (GetAsyncKeyState(stop_key) & 0x8000);
+	} until (GetAsyncKeyState(cfg.keys.stop) & 0x8000);
 
 	// abort code when the stop key is pressed.
 	printf("\e[4;22Hs=%016llx", start_state.matx);
@@ -124,8 +124,8 @@ static FORCE_INLINE void _cli_sim1(const u64 trial) {
 	VA_IF(_cli_sim2(trial, start_state), _cli_sim1(trial), start_state)
 
 static void _cli_sim_one1(Matx8 state) {
-	unlikely_if (silent) {
-		do Sleep(sleep_ms[1]); until (GetAsyncKeyState(stop_key) & 0x8000);
+	unlikely_if (cfg.silent) {
+		do Sleep(cfg.sleep_ms.state); until (GetAsyncKeyState(cfg.keys.stop) & 0x8000);
 		return;
 	}
 
@@ -134,15 +134,15 @@ static void _cli_sim_one1(Matx8 state) {
 	print_state(state);
 
 	do {
-		Sleep(sleep_ms[1]);
+		Sleep(cfg.sleep_ms.state);
 		state = Matx8_next(state);
 
 		printf("\e[H");
 		print_state(state);
-	} until (GetAsyncKeyState(stop_key) & 0x8000);
+	} until (GetAsyncKeyState(cfg.keys.stop) & 0x8000);
 
 #if DEBUG
-	if (!quiet)
+	if (!cfg.quiet)
 		putchar('\n');
 #endif
 }

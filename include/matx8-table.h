@@ -37,6 +37,8 @@
 typedef union {
 	u64 matx;   // the whole matrix as a single integer
 	u8 rows[8]; // each row as a separate integer
+	u16 quarters[4];
+	u32 halves[2];
 } Matx8;
 
 constexpr u64 Matx8_xroll_masks[8] = {

@@ -4,17 +4,6 @@
 // for unions. C just reinterprets the bits as the other type with no change,
 // even if the standard doesn't technically guarantee that is what happens.
 
-// TODO: make a mode to search for number of predecessors in random states
-// TODO: in `step <state> <positive>, if the size is really large, then go until the
-//       first state, and modulo the remaining step count by the period. the
-//       threshold should be roughly 1000 steps. On my machine, it should theoretically
-//       be 353 steps, but I think 500-1000 is likely a better idea.
-// TODO: consider this idea: for reverse search, instead of adding everything to a
-//       running state array every time, do 2x2 grids separately, and then add them
-//       together into 4x4 grids, and then add those together as an 8x8 grid.
-//       I think this should reduce the amount of intermediate states needed.
-//       at each step, do `out = (UL ⋈ UR) ⋈ (DL ⋈ DR)` and recurse.
-
 ///////////////////////////////// config start ////////////////////////////////
 
 #ifndef ALIVE_CHAR_DEF
@@ -37,6 +26,12 @@
 // 43200 == 12*60*60. this definition has to be the final expression result.
 #ifndef TIMER_PERIOD
 	#define TIMER_PERIOD	43200 // seconds
+#endif
+
+// step value threshold after which `life step` will start using modulo on the count
+// 512-1024 is around the ballpark of when it starts giving improvement
+#ifndef STEP_MOD_THRESH
+	#define STEP_MOD_THRESH	512
 #endif
 
 // NOTE: these values and comments are for NEIGHBORHOOD=MOORE and RULESET=B3/S23
@@ -64,7 +59,7 @@
 #endif
 
 // max number of collisions per trial before errors.
-// this has to be at least 143 with TABLE_BITS=9 and FAST_HASHING=true
+// this has to be at least 143 with TABLE_BITS=9
 #ifndef ARENA_LEN
 	#define ARENA_LEN		256
 #endif
@@ -110,13 +105,6 @@
 	#define TIMER false
 #endif
 
-#ifndef FAST_HASHING
-	// true  => multiplication hashing
-	// false => reduced, keyless, and weakened version of SipHash-1-3
-	// either way, the hash function isn't cryptographic
-	#define FAST_HASHING true
-#endif
-
 #ifndef HELP
 	// true => include help text in the binary.
 	// false => don't include help text. significantly reduces the binary size.
@@ -158,6 +146,8 @@
 	// but I really don't want it to use the __mingw functions.
 	#define __USE_MINGW_ANSI_STDIO 0
 #endif
+
+#define FALLTHROUGH __attribute__((fallthrough))
 
 #define ememcpy(dst, src, len) (__builtin_memcpy(dst, src, len) + len /* point to the end */)
 #define streq(x, y) (__builtin_strcmp(x, y) == 0)
@@ -210,24 +200,29 @@
 #define CHARS8_TO_U64(c0, c1, c2, c3, c4, c5, c6, c7) \
 	((u64)CHARS4_TO_U32(c4, c5, c6, c7) << 32 | (u64)CHARS4_TO_U32(c0, c1, c2, c3))
 
-#include <string.h> // strcmp, sprintf, memcpy
-#include <time.h>   // _localtime64, _timespec64_get, struct _timespec64, struct tm
-#include <sys/stat.h> // S_IWRITE
+#include <string.h>      // strcmp, sprintf, memcpy
+#include <time.h>        // _localtime64, _timespec64_get, struct _timespec64, struct tm
+#include <sys/stat.h>    // S_IWRITE
 #include <sys/locking.h> // LK_NBLCK
 
 #define ERRLOG_USE_RUNTIME_LOG_LEVEL
 #include "error-print.h" // stdlib.h, stdio.h, fcntl.h (io.h (_open, _write, ...), O_CREAT, ...)
 #include "windows.h"
-#include "matx8-table.h"
-#include "matx8-next.h" // Matx8_next
+#include "matx8.h"
+#include "matx8-next.h"  // Matx8_next
+#include "table.h"
 
 typedef enum <% EMPTY, CONST, CYCLE %> sttyp_t; // state type
 
 // hashtable and total_collisions are defined in matx8-table.h now.
 
 // static HashTable hashtable = {0};
+#define COMBINED_HIST_SIZE (PERIOD_LEN + TRANSIENT_LEN + 2)
 static union {
-	u64 combined[PERIOD_LEN + TRANSIENT_LEN + 3];
+	struct {
+		u64 combined[COMBINED_HIST_SIZE];
+		u64 trial;
+	};
 
 	__attribute__((packed)) struct {
 		u64 periods[PERIOD_LEN];
@@ -312,17 +307,20 @@ static const char *const help_string =
 	"\n    help           alias of `-h` flag"
 	"\n    run,nrun       runs simulations and gives in-depth statistics"
 	"\n    sim,sim1,nsim  runs simulations visually without statistics"
-	"\n    step           step to the next state and print out the result"
-	"\n                   takes an optional second operand for the number of steps"
-	"\n                   works both for forwards and backwards step sizes"
-	"\n                   if a negative size is given, it returns all solutions"
+	"\n    step S [N]     step to the next state and print out the result"
+	"\n                   N is the number of steps to take (defaults to 1)."
+	"\n    bwsr S [N]     backwards search to find all Nth-generation"
+	"\n                   ancestors to a given state. N defaults to 1."
+	"\n    bwrn [N]       run N random trials on predecessor counts. N defaults to 1."
+	"\n    tfm S T [X Y]  apply a transformation and an optional translation."
+	"\n                   options for T are given below. T happens before X and Y"
 	"\n"
 	"\n    dump           runs `./" PY_BASE ".py -s " DATAFILE "` and exit"
 	"\n    fold           runs `./" PY_BASE ".py -f " DATAFILE "` and exit"
 	"\n    cnt            counts the number of objects in " DATAFILE
 	"\n    merg A B       runs `./" PY_BASE ".py -m A B` and exit"
 	"\n"
-	"\n    nrun and nsim take one argument with the number of trials to run."
+	"\n    nrun, nsim, and bwrn take one argument with the number of trials to run."
 	"\n      'inf' can be given to make it run indefinitely."
 	"\n    run and sim take a list of integers for the starting states."
 	"\n    sim1 takes a single integer for the starting state."
@@ -355,7 +353,6 @@ static const char *const help_string =
 	"\n    ARENA_LEN="		TOSTRING_EXPANDED(ARENA_LEN)
 	"\n    TIMER="			TOSTRING_EXPANDED(TIMER)
 	"\n    CLIPBOARD="		TOSTRING_EXPANDED(CLIPBOARD)
-	"\n    FAST_HASHING="	TOSTRING_EXPANDED(FAST_HASHING)
 	"\n    DEBUG="			TOSTRING_EXPANDED(DEBUG)
 	"\n"
 	"\nexit codes:"
@@ -374,7 +371,19 @@ static const char *const help_string =
 	"\n    3  new transient value"
 	"\n    2  period > 36 and transient - period > 196"
 	"\n    1  2nd or 3rd encounter of a particular period"
-	"\n    0  2nd or 3rd encounter of a particular transient length";
+	"\n    0  2nd or 3rd encounter of a particular transient length"
+	"\n"
+	"\ntransformation codes:"
+	// NOTE: these might be out of order, but always internally consistent
+	"\n    " TOSTRING_EXPANDED(TFM_IDENTITY)	"  " TFM_IDENTITY_STR
+	"\n    " TOSTRING_EXPANDED(TFM_YFLIP)		"  " TFM_YFLIP_STR
+	"\n    " TOSTRING_EXPANDED(TFM_XFLIP)		"  " TFM_XFLIP_STR
+	"\n    " TOSTRING_EXPANDED(TFM_TRS)			"  " TFM_TRS_STR
+	"\n    " TOSTRING_EXPANDED(TFM_ANTI_TRS)	"  " TFM_ANTI_TRS_STR
+	"\n    " TOSTRING_EXPANDED(TFM_ROT180)		"  " TFM_ROT180_STR
+	"\n    " TOSTRING_EXPANDED(TFM_ROT90)		"  " TFM_ROT90_STR
+	"\n    " TOSTRING_EXPANDED(TFM_ROT270)		"  " TFM_ROT270_STR
+;
 #else // HELP
 static const char *const help_string = "help text was not included in this build";
 #endif
@@ -409,6 +418,7 @@ static void bell(void) { likely_if (!cfg.silent) putchar('\x07'); }
 #include "sim.h"
 #include "run.h"
 #include "bw-search.h"
+#include "bw-run.h"
 
 #if DEBUG
 static void log_collisions(void) {
@@ -635,6 +645,30 @@ flag_unknown:
 	exit(7);
 }
 
+static _Noreturn void cmd_invalid_operand(const char *const restrict cmd, const u8 pos) {
+	eprintf("command `%s` given with an invalid value at position %u.\n", cmd, pos);
+	exit(4);
+}
+
+static Matx8 Matx8_tryparse(
+	char *restrict *restrict argv,
+	const char *const restrict cmd,
+	const u8 pos
+) {
+	char *str_end, *str = argv[pos];
+
+	// NOTE: if you pass something like "  0b10101", then it will not work as expected
+	//       because I do not skip leading whitespace before the "0b" check.
+	const u64 state = str[0] == '0' && (str[1] | 32) == 'b' ?
+		strtoull(str + 2, &str_end, 2) :
+		strtoull(str, &str_end, 0);
+
+	if (*str_end != '\0')
+		cmd_invalid_operand(cmd, pos);
+
+	return (Matx8) {.matx = state};
+}
+
 void init_crt(void);
 
 #if PROFILING
@@ -703,7 +737,7 @@ void mainCRTStartup(void)
 	unlikely_if (argv[0][3] && argv[0][4])
 		goto unknown_command;
 
-	u64 n; // for nrun and nsim
+	u64 n; // more than one branch use a generic u64 variable
 
 	// parse the first argument as a 32-bit unsigned integer.
 	// these branches aren't worth putting in helper functions because they are tiny.
@@ -723,7 +757,7 @@ void mainCRTStartup(void)
 				__builtin_unreachable();
 			}
 			else
-				n = strtoull(argv[1], NULL, 0);
+				n = Matx8_tryparse(argv, "run", 1).matx;
 		}
 		else if (argc == 1)
 			n = 1;
@@ -735,7 +769,7 @@ void mainCRTStartup(void)
 		for (u8 i = 0; i < (n & 7); i++)
 			run_once();
 
-		for (u32 i = n >> 3; i --> 0 ;)
+		for (u64 i = n >> 3; i --> 0 ;)
 			RUN_8();
 
 		give_summary(false);
@@ -751,17 +785,14 @@ void mainCRTStartup(void)
 		else
 			// run once for each state given
 			for (u32 i = 1; i < argc; i++) {
-				char *str_end;
-				Matx8 state = {.matx = strtoull(argv[i], &str_end, 0)};
-
-				if (*str_end != '\0') {
-					likely_if (!cfg.silent)
-						putchar('\n');
-					eprintf("command `%s` given with an invalid value at position %u.\n", "run", i);
-					exit(4);
+				if (cfg.silent)
+					run_once(Matx8_tryparse(argv, "run", i));
+				else {
+					putchar('\n');
+					Matx8 state = Matx8_tryparse(argv, "run", i);
+					printf("\e[A");
+					run_once(state);
 				}
-
-				run_once(state);
 			}
 
 		give_summary(false);
@@ -781,15 +812,7 @@ void mainCRTStartup(void)
 
 		// run once for each state given
 		for (u32 i = 1; i < argc; i++) {
-			char *str_end;
-			Matx8 state = {.matx = strtoull(argv[i], &str_end, 0)};
-
-			if (*str_end != '\0') {
-				eprintf("command `%s` given with an invalid value at position %u.\n", "sim", i);
-				exit(4);
-			}
-
-			cli_sim(i, state);
+			cli_sim(i, Matx8_tryparse(argv, "sim", i));
 
 			unlikely_if (i != argc - 1)
 				// don't sleep after the last iteration
@@ -801,7 +824,7 @@ void mainCRTStartup(void)
 			putchar('\n');
 		#endif
 		break;
-	case CHARS4_TO_U32('s', 'i', 'm', '1'): {
+	case CHARS4_TO_U32('s', 'i', 'm', '1'):
 		if (argc == 0)
 			__builtin_unreachable();
 
@@ -816,18 +839,8 @@ void mainCRTStartup(void)
 		}
 
 		// argc == 2
-
-		char *str_end;
-		Matx8 state = {.matx = strtoull(argv[1], &str_end, 0)};
-
-		if (*str_end != '\0') {
-			eprintf("command `%s` given with an invalid value at position %u.\n", "sim1", 1);
-			exit(4);
-		}
-
-		cli_sim_one(state);
+		cli_sim_one(Matx8_tryparse(argv, "sim1", 1));
 		break;
-	}
 	case CHARS4_TO_U32('n', 's', 'i', 'm'):
 		if (argc == 0)
 			__builtin_unreachable();
@@ -846,7 +859,7 @@ void mainCRTStartup(void)
 				__builtin_unreachable();
 			}
 
-			n = strtoull(argv[1], NULL, 0);
+			n = Matx8_tryparse(argv, "nsim", 1).matx;
 		}
 		else if (argc == 1)
 			n = 1; // default to one trial.
@@ -858,7 +871,7 @@ void mainCRTStartup(void)
 		unlikely_if (n == 0)
 			exit(0);
 
-		for (u32 i = 1; i < n; i++) {
+		for (u64 i = 1; i < n; i++) {
 			cli_sim(i);
 			Sleep(cfg.sleep_ms.trial);
 		}
@@ -880,69 +893,168 @@ void mainCRTStartup(void)
 			exit(4);
 		}
 
-		char *str_end;
-
-		Matx8 state = {.matx = strtoull(argv[1], &str_end, 0)};
-
-		if (*str_end != '\0') {
-			eprintf("command `%s` given with an invalid value at position %u.\n", "step", 1);
-			exit(4);
-		}
+		Matx8 state = Matx8_tryparse(argv, "step", 1);
 
 		if (argc == 2)
 			n = 1;
-		else {
-			// NOTE: strtoull is actually the exact same as strtoll
-			//       so passing in stuff like "-1" still works just fine.
+		else
+			n = Matx8_tryparse(argv, "step", 2).matx;
 
-			n = strtoull(argv[2], &str_end, 0);
+		if (n >= STEP_MOD_THRESH) {
+			const bool original_quiet = cfg.quiet;
+			cfg.quiet = true;
+			run_once(state);
+		#if DEBUG
+			total_collisions = 0;
+		#endif
+			cfg.quiet = original_quiet;
 
-			if (*str_end != '\0') {
-				eprintf("command `%s` given with an invalid value at position %u.\n", "step", 2);
-				exit(4);
-			}
-		}
+			u32 p, t;
 
-		if (n <= INT64_MAX) {
-			// positive step size
-			while (n --> 0)
+			for (p = 0; data.periods[p] == 0; p++)
+				if (p >= PERIOD_MAX)
+					__builtin_unreachable();
+
+			for (t = 0; data.transients[t] == 0; t++)
+				if (t >= TRANSIENT_MAX)
+					__builtin_unreachable();
+
+			n -= t;
+			t -= p;
+			n %= p;
+
+			// iterate until it starts repeating
+			while (t --> 0)
 				state = Matx8_next(state);
-
-			likely_if (!cfg.silent)
-				printf("0x%016llx\n", state.matx);
-
-			if (!cfg.quiet) {
-				print_state(state);
-				putchar('\n');
-			}
-		} else {
-			// negative step size
-
-			if (n == 0)
-				// -0 only exists for floats.
-				__builtin_unreachable();
-
-			n = -n;
-
-			Matx8 *prev_states = (Matx8 *) malloc(2 * sizeof(Matx8)) + 1;
-			prev_states[-1].matx = 1; // 1 state
-			prev_states[0] = state;
-
-			while (n > 0) {
-				if (!cfg.quiet)
-					printf("%llu step%s remaining\n", n, "s" + (n == 1));
-
-				prev_states = advance_predecessors(prev_states);
-				n--;
-			}
-
-			const u64 prev_cnt = prev_states[-1].matx;
-
-			likely_if (!cfg.silent)
-				for (u64 i = 0; i < prev_cnt; i++)
-					printf("0x%016llx\n", prev_states[i].matx);
 		}
 
+		while (n --> 0)
+			state = Matx8_next(state);
+
+		likely_if (!cfg.silent)
+			printf("0x%016llx\n", state.matx);
+
+		if (!cfg.quiet) {
+			print_state(state);
+			putchar('\n');
+		}
+
+		break;
+	}
+	case CHARS4_TO_U32('b', 'w', 's', 'r'): {
+		// backwards search
+		if (argc == 0)
+			__builtin_unreachable();
+
+		unlikely_if (argc < 2 && argc > 3) {
+			eprintf("command `%s` expected %s operands, found %u.\n", "bwsr", "1 or 2", argc - 1);
+			exit(4);
+		}
+
+		Matx8 state = Matx8_tryparse(argv, "bwsr", 1);
+
+		n = argc == 2 ? 1 : Matx8_tryparse(argv, "bwsr", 2).matx;
+
+		// predecessor list
+		const StateBuffer *pdlist = (StateBuffer *) malloc(sizeof(StateBuffer) + sizeof(Matx8));
+
+		// cast away the const for initialization
+		((StateBuffer *) pdlist)->size      = 1; // 1 state
+		((StateBuffer *) pdlist)->states[0] = state;
+
+		for (; n > 0 && pdlist->size > 0; n--) {
+			if (!cfg.quiet)
+				printf("%llu step%s remaining\n", n, "s" + (n == 1));
+
+			pdlist = find_predecessors(pdlist);
+		}
+
+		likely_if (!cfg.silent)
+			for (u64 i = 0; i < pdlist->size; i++)
+				printf("0x%016llx\n", pdlist->states[i].matx);
+
+		break;
+	}
+	case CHARS4_TO_U32('b', 'w', 'r', 'n'):
+		// backwards run
+		init_bws_hist2();
+
+		if (argc == 0)
+			__builtin_unreachable();
+
+		unlikely_if (argc > 2) {
+			eprintf("command `%s` expected %s operands, found %u.\n", "bwrn", "0 or 1", argc - 1);
+			exit(4);
+		}
+
+		if (!cfg.quiet)
+			printf("s=state, c=pd-cnt instance number, n=pd-cnt, T=trial");
+
+		if (argc == 1)
+			bws_run(1);
+		else if (streq(argv[1], "inf"))
+			bws_run_forever();
+		else
+			bws_run(Matx8_tryparse(argv, "bwrn", 1).matx);
+
+		if (cfg.silent)
+			break;
+
+		if (!cfg.quiet)
+			putchar('\n');
+
+		printf("Summary:\ntotal trial count: ");
+		print_du64(data.trial);
+		putchar('\n');
+		for (u64 i = 0; i < COMBINED_HIST_SIZE; i++)
+			if (data.combined[i] != 0)
+				printf("    %llu: %llu\n", i, data.combined[i]);
+
+		n = bws_hist2->size;
+		for (u64 i = 0; i < n; i++)
+			printf("    %llu: %llu\n", bws_hist2->list[i].key, bws_hist2->list[i].cnt);
+
+		break;
+	case CHARS4_TO_U32('t', 'f', 'm',  0 ): {
+		if (argc == 0)
+			__builtin_unreachable();
+
+		unlikely_if (argc != 3 && argc != 5) {
+			eprintf("command `%s` expected %s operands, found %u.\n", "tfm", "2 or 4", argc - 1);
+			exit(4);
+		}
+
+		Matx8 state = Matx8_tryparse(argv, "tfm", 1);
+		const u64 tfm = Matx8_tryparse(argv, "tfm", 2).matx;
+
+		if (tfm >= sizeof(tfm_strs) / sizeof(*tfm_strs))
+			cmd_invalid_operand("tfm", 2);
+
+		Point8 roll;
+
+		if (argc == 3)
+			roll = (Point8) {0};
+		else {
+			u64 tmp = Matx8_tryparse(argv, "tfm", 3).matx;
+			if (tmp > 7) cmd_invalid_operand("tfm", 3);
+			roll.x = tmp;
+
+			tmp = Matx8_tryparse(argv, "tfm", 4).matx;
+			if (tmp > 7) cmd_invalid_operand("tfm", 4);
+			roll.y = tmp;
+		}
+
+		state = Matx8_tfm(state, tfm);
+		state = Matx8_xroll(state, roll.x);
+		state = Matx8_yroll(state, roll.y);
+
+		likely_if (!cfg.silent)
+			printf("0x%016llx\n", state.matx);
+
+		if (!cfg.quiet) {
+			print_state(state);
+			putchar('\n');
+		}
 		break;
 	}
 	case CHARS4_TO_U32('d', 'u', 'm', 'p'):
@@ -965,10 +1077,8 @@ void mainCRTStartup(void)
 		for (u8 i, j = 1; j < 3; j++) {
 			for (i = 0; i < UINT8_MAX && argv[j][i] != '\0'; i++);
 
-			if (i == UINT8_MAX) {
-				eprintf("command `%s` given with an invalid value at position %u.\n", "merg", i);
-				exit(4);
-			}
+			if (i == UINT8_MAX)
+				cmd_invalid_operand("merg", i);
 		}
 
 		// allocate on the stack instead of using `malloc`.

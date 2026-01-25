@@ -1,7 +1,7 @@
 #pragma once
-#define BW_STEP_H
+#define BW_SEARCH_H
 
-// backwards stepping
+// backwards search
 
 #ifndef B_TT
 	#pragma message("B_TT not defined. assuming B2")
@@ -15,7 +15,7 @@
 
 // truth table to predecessor count (alive cells)
 // \sum_{i=0}^8 (tt bit i) * (8 choose i)
-#define TT2PDCRCNT_A(tt) ((u16) ( \
+#define TT2PDCNT_A(tt) ((u16) ( \
 	((tt >> 0) & 1) *  1 + \
 	((tt >> 1) & 1) *  8 + \
 	((tt >> 2) & 1) * 28 + \
@@ -29,13 +29,35 @@
 
 // truth table to predecessor count (dead cells)
 // 256 = 2^8 = \sum_{i=0}^8 (8 choose i)
-#define TT2PDCRCNT_D(tt) ((u16) (256 - TT2PDCRCNT_A(tt)))
+#define TT2PDCNT_D(tt) ((u16) (256 - TT2PDCNT_A(tt)))
 
-#define ALIVE_PRED_COUNT() (TT2PDCRCNT_A(B_TT) + TT2PDCRCNT_A(S_TT))
-#define DEAD_PRED_COUNT()  (TT2PDCRCNT_D(B_TT) + TT2PDCRCNT_D(S_TT))
+#define ALIVE_PRED_COUNT() (TT2PDCNT_A(B_TT) + TT2PDCNT_A(S_TT))
+#define DEAD_PRED_COUNT()  (TT2PDCNT_D(B_TT) + TT2PDCNT_D(S_TT))
 
-#define BW_SEARCH_ONES_BETTER()    (ALIVE_PRED_COUNT() < DEAD_PRED_COUNT())
-#define BW_SEARCH_ZEROS_BETTER()   (ALIVE_PRED_COUNT() > DEAD_PRED_COUNT())
+#define BW_SEARCH_ONES_BETTER()  (ALIVE_PRED_COUNT() < DEAD_PRED_COUNT())
+#define BW_SEARCH_ZEROS_BETTER() (ALIVE_PRED_COUNT() > DEAD_PRED_COUNT())
+
+typedef struct {
+	u64 size; // number of states.
+	Matx8 states[];
+} StateBuffer;
+
+// 2d 8-bit point
+typedef struct {
+	u8 x, y;
+} Point8;
+
+constexpr u8 spread4_lut[16] = {
+	0b00000000, 0b00000001, 0b00000100, 0b00000101,
+	0b00010000, 0b00010001, 0b00010100, 0b00010101,
+	0b01000000, 0b01000001, 0b01000100, 0b01000101,
+	0b01010000, 0b01010001, 0b01010100, 0b01010101,
+};
+
+static FORCE_INLINE u16 spread8(const u8 x) {
+	// double the bit indices for each bit in an 8-bit integer, returning a 16-bit integer
+	return spread4_lut[x >> 4] << 8 | spread4_lut[x & 15];
+}
 
 // NOTE: `size` never includes the metadata.
 
@@ -64,11 +86,23 @@ static void _heapify(u64 *arr, i64 n, i64 i) {
 
 static void _sort(u64 *arr, i64 high, u64 depth, u64 depth_max) {
 	// introsort
+	while (high > 0) {
+		if (high <= 24) {
+			for (i64 step = 1; step <= high; step++) {
+				u64 key = arr[step];
+				i64 j   = (i64) (step - 1);
 
-	const u64 entry_depth = depth;
-	const u64 size = high + 1;
+				while (j >= 0 && key < arr[j]) {
+					arr[j + 1] = arr[j];
+					j--;
+				}
 
-	while (high > 24) {
+				arr[j + 1] = key;
+			}
+
+			return;
+		}
+
 		if (depth > depth_max) {
 			// heap sort
 			for (i64 i = high + 1 >> 1; i --> 0 ;)
@@ -82,7 +116,7 @@ static void _sort(u64 *arr, i64 high, u64 depth, u64 depth_max) {
 				_heapify(arr, i, 0ll);
 			}
 
-			break;
+			return;
 		}
 
 		// quick sort
@@ -111,23 +145,21 @@ static void _sort(u64 *arr, i64 high, u64 depth, u64 depth_max) {
 		});
 
 		// compute the partition index
-		u64 tmp;
-		i64 i = 0, j = high;
+		i64 i = 1, j = high;
 
-		while (i < j) {
-			while (arr[i] <= p && i <= high - 1) i++;
-			while (arr[j] >  p && j >= 1) j--;
+		while (true) {
+			while (i <= high && arr[i] < p) i++;
+			while (arr[j] > p) j--;
 
-			if (i < j) {
-				tmp    = arr[i];
-				arr[i] = arr[j];
-				arr[j] = tmp;
-			}
+			if (i >= j) break;
+
+			u64 tmp = arr[i];
+			arr[i]  = arr[j];
+			arr[j]  = tmp;
 		}
 
-		tmp    = arr[0];
 		arr[0] = arr[j];
-		arr[j] = tmp;
+		arr[j] = p;
 
 		pi = j;
 
@@ -147,25 +179,9 @@ static void _sort(u64 *arr, i64 high, u64 depth, u64 depth_max) {
 			high = pi - 1;
 		}
 	}
-
-	if (entry_depth > 0)
-		return;
-
-	// delayed insertion sort pass
-	for (u64 step = 1; step < size; step++) {
-		u64 key = arr[step];
-		i64 j   = (i64) (step - 1);
-
-		while (j >= 0 && key < arr[j]) {
-			arr[j + 1] = arr[j];
-			j--;
-		}
-
-		arr[j + 1] = key;
-	}
 }
 
-static void sort(u64 *const arr, const u64 size) {
+static FORCE_INLINE void sort(u64 *const arr, const u64 size) {
 	_sort(arr, (u64) (size - 1), 0, (63 - __builtin_clzll(size)) << 1);
 }
 
@@ -206,11 +222,7 @@ static Matx8 *_gen_combos(Matx8 *restrict out, Matx8 *restrict arr, Matx8 center
 		return out + 1;
 	}
 
-	u8 indices[8]; // k is never more than 8, so just allocate 8 bytes.
-
-	// start with [0, 1, ..., k-1]
-	for (u8 i = 0; i < k; i++)
-		indices[i] = i;
+	u8 indices[8] = {0, 1, 2, 3, 4, 5, 6, 7};
 
 	while (true) {
 		// combine the states together and output the state
@@ -289,16 +301,19 @@ static u64 states_for_bit(const u8 bit, const bool alive) {
 	;nbuf[5] = x6; nbuf[6] = x7; nbuf[7] = x8;
 
 	const Matx8 bits = {
-		.matx = x0.matx | x1.matx | x2.matx | x3.matx | x4.matx |
-				x5.matx | x6.matx | x7.matx | x8.matx
+		.matx = x0.matx | x1.matx | x2.matx |
+				x3.matx | x4.matx | x5.matx |
+				x6.matx | x7.matx | x8.matx
 	};
 #elif NEIGHBORHOOD == NH_VON_NEUMANN
 	;              nbuf[0] = x1;            ;
 	;nbuf[1] = x3;              nbuf[2] = x5;
 	;              nbuf[3] = x7;            ;
 
-	const Matx8 bits = {.matx =
-		x1.matx | x3.matx | x4.matx | x5.matx | x7.matx
+	const Matx8 bits = {
+		.matx =           x1.matx |
+				x3.matx | x4.matx | x5.matx |
+				          x7.matx
 	};
 #else // NH_DIAGONAL
 	;nbuf[0] = x0;              nbuf[1] = x2;
@@ -306,7 +321,9 @@ static u64 states_for_bit(const u8 bit, const bool alive) {
 	;nbuf[2] = x6;              nbuf[3] = x8;
 
 	const Matx8 bits = {
-		.matx = x0.matx | x2.matx | x4.matx | x6.matx | x8.matx
+		.matx = x0.matx |           x2.matx |
+				          x4.matx |
+				x6.matx |           x8.matx
 	};
 #endif
 
@@ -329,8 +346,8 @@ static u64 states_for_bit(const u8 bit, const bool alive) {
 	return (u64) (out - (Matx8 *) hashtable.scratch) - 1;
 }
 
-static u64 advance_ptlstate(Matx8 **const pout, const u64 old_cnt, const u64 new_cnt, const u8 bit_idx) {
-	// out = [allocation size] [bitmask] [actual output array]
+static u64 advance_ptlstate(Matx8 **const pbuf, const u64 old_cnt, const u64 new_cnt, const u8 bit_idx) {
+	// buf = [allocation size] [bitmask] [actual output array]
 	// NOTE: you have to call `states_for_bit` first, otherwise this returns garbage
 	// NOTE: if old_cnt == 0, this will not do anything.
 	// returns the new value of old_cnt
@@ -347,77 +364,67 @@ static u64 advance_ptlstate(Matx8 **const pout, const u64 old_cnt, const u64 new
 	if (new_cnt == 0)
 		return 0;
 
-	Matx8 *out = *pout;
-	u64 out_size = out[-2].matx; // size in bytes
+	Matx8 *buf = *pbuf;
+	u64 buf_size = buf[-2].matx; // allocation size in bytes
 
 	// the values here should be set previously in states_for_bit
 	Matx8 *new = (Matx8 *) hashtable.scratch + 1;
 
 	const u64
-		old_bitmask = out[-1].matx, // running partial state bitmask
-		new_bitmask = new[-1].matx,  // bitmask for only the new bit
-		shared_bitmask = old_bitmask & new_bitmask;
+		new_bitmask    = new[-1].matx, // bitmask for only the new bit
+		shared_bitmask = buf[-1].matx & new_bitmask;
 
-	out[-1].matx = old_bitmask | new_bitmask; // move the bitmask to the output and increment
+	buf[-1].matx |= new_bitmask;
 
 	// point the temporary buffer right after the old buffer
-	Matx8 *tmp = out + old_cnt;
+	Matx8 *tmp = buf + old_cnt;
 
 	u64 idx = 0; // output index
 
 	for (u64 i = 0; i < old_cnt; i++)
 	for (u64 j = 0; j < new_cnt; j++)
 		// for any bits that both states claim to know, they give the same values
-		if ((shared_bitmask & (out[i].matx ^ new[j].matx)) == 0) {
-			if ((idx + old_cnt + 3llu) * sizeof(Matx8) >= out_size) {
-				out_size <<= 1; // double the size on each overflow
-				out[-2].matx = out_size;
+		if ((shared_bitmask & (buf[i].matx ^ new[j].matx)) == 0) {
+			if ((idx + old_cnt + 3llu) * sizeof(Matx8) >= buf_size) {
+				buf_size <<= 1; // double the size on each overflow
+				buf[-2].matx = buf_size;
 
 			#if DEBUG
+				const bool ge1GiB = buf_size >= 1024*1024*1024;
 				if (!cfg.quiet) enprintf(
-					"doubling buffer size to %llu MiB. old_cnt=%llu, idx=%llu",
-					out_size >> 20, old_cnt, idx
+					"doubling buffer size to %llu %ciB. running cnt=%llu, current cnt=%llu",
+					buf_size >> 20 + 10*ge1GiB, ge1GiB ? 'G' : 'M', old_cnt, idx
 				);
 			#endif
 
-				out = realloc(out - 2, out_size);
-				tmp = out + old_cnt;
-				OOM(out, 1);
+				buf = realloc(buf - 2, buf_size);
+				OOM(buf, 1);
 
 			#if DEBUG
 				// sometimes the reallocation can take a long time.
 				if (!cfg.quiet)
-					puts(". done");
+					// I know fputs is faster, but that is a whole extra DLL import.
+					fprintf(stderr, ". done\n");
 			#endif
 
-				out += 2;
-				*pout = out;
+				buf  += 2;
+				tmp   = buf + old_cnt;
+				*pbuf = buf;
 			}
 
-			tmp[idx++].matx = out[i].matx | new[j].matx;
+			tmp[idx++].matx = buf[i].matx | new[j].matx;
 		}
 
 	const u64 size = idx;
 
-	memmove(out, tmp, size * sizeof(Matx8));
+	memmove(buf, tmp, size * sizeof(Matx8));
 	return size;
 }
 
-constexpr u8 spread4_lut[16] = {
-	0b00000000, 0b00000001, 0b00000100, 0b00000101,
-	0b00010000, 0b00010001, 0b00010100, 0b00010101,
-	0b01000000, 0b01000001, 0b01000100, 0b01000101,
-	0b01010000, 0b01010001, 0b01010100, 0b01010101,
-};
-
-static FORCE_INLINE u16 spread8(const u8 x) {
-	// double the bit indices for each bit in an 8-bit integer
-	return spread4_lut[x >> 4] << 4 | spread4_lut[x & 15];
-}
-
-static FORCE_INLINE Matx8 *find_predecessors(Matx8 state) {
+static const StateBuffer *_find_predecessors1m(Matx8 state) {
 	// returns the number of predecessors found.
 	// the elements are in the program scratch buffer
+	// tmp - 2 = [allocation size] [partial state count] [partial states...]
 	static Matx8 *tmp = NULL;
 
 	if (tmp == NULL) {
@@ -429,61 +436,72 @@ static FORCE_INLINE Matx8 *find_predecessors(Matx8 state) {
 		tmp[-2].matx = 4 * 1024 * 1024;
 	}
 
+	// NOTE: for the diagonal neighborhood, this is likely not the best pattern,
+	//       but I don't feel like making a whole separate implementation just
+	//       for that, so I am going to pretend that this is just as optimal.
+
 	// temporary buffer for the current bit's states
 	tmp[-1].matx = 0; // no bits known
-	tmp[0].matx  = 0; // blank state
+	tmp[ 0].matx = 0; // blank state
 	u64 cnt      = 1; // 1 object in the array
 
-	struct { u8 x, y; } roll = {0};
+	// identity transformation
+	Point8 roll = {0};
+	u8 best_tfm = TFM_IDENTITY;
 
 	if (BW_SEARCH_ONES_BETTER() || BW_SEARCH_ZEROS_BETTER()) {
-		Matx8 tmp;
-
-		// find the best Y rotation
-		// default to the worst value before finding better ones.
-		u8 best_cnt = BW_SEARCH_ONES_BETTER() ? 0 : UINT8_MAX;
-
-		for (u8 row = 0; row < 8; row++) {
-			tmp = Matx8_yroll(state, row);
-			const u8 cnt = POPCNT(tmp.quarters[0]);
-
-			if (BW_SEARCH_ONES_BETTER() ? cnt > best_cnt : cnt < best_cnt) {
-				roll.y   = row;
-				best_cnt = cnt;
-			}
-		}
-
-		state = tmp;
-
-		// find the best X rotation
 		// default to the worst value before finding better ones
-		u16 best_val = BW_SEARCH_ONES_BETTER() ? UINT16_MAX : 0;
+		u64 best_val = BW_SEARCH_ONES_BETTER() ? 0 : UINT64_MAX;
 
-		for (u8 col = 0; col < 8; col++) {
-			tmp = Matx8_xroll(state, col);
-			// row 1: A B C D E F G H
-			// row 2: I J K L M N O P
-			// =>
-			//    A   B   C   D   E   F   G   H
-			// or   I   J   K   L   M   N   O   P
-			//  =
-			//    A I B J C K D L E M F N G O H P
-			const u16 val = spread8(tmp.rows[1]) << 1 | spread8(tmp.rows[0]);
+		for (u8 tfm = 0; tfm < sizeof(tfm_strs) / sizeof(*tfm_strs); tfm++) {
+			const Matx8 tfm_state = Matx8_tfm(state, tfm);
 
-			if (BW_SEARCH_ONES_BETTER() ? val < best_val : val > best_val) {
-				roll.x   = col;
-				best_val = val;
-			}
-		}
+			for (u8 y = 0; y < 8; y++) {
+				const Matx8 yroll_state = Matx8_yroll(tfm_state, y);
 
-		state = tmp;
-	}
+				for (u8 x = 0; x < 8; x++) {
+					const Matx8 xroll_state = Matx8_xroll(yroll_state, x);
+					// NOTE: rbit(a) > rbit(b) and a < b are not equivalent
+					// row 1: A B C D E F G H
+					// row 0: I J K L M N O P
+					// rbit =>
+					//        H G F E D C B A
+					//        P O N M L K J I
+					// spread and offset =>
+					//        0 H 0 G 0 F 0 E 0 D 0 C 0 B 0 A
+					//        P 0 O 0 N 0 M 0 L 0 K 0 J 0 I 0
+					// combine =>
+					//        P H O G N F M E L D K C J B I A
+					// tack on the rest of the rows in reverse order as well.
+					// if ones are better, maximize this. otherwise minimize it.
+					const u64 val =
+						(u64) spread8(rbit8(xroll_state.rows[0])) << 49 |
+						(u64) spread8(rbit8(xroll_state.rows[1])) << 48 |
+						(u64) rbit8(xroll_state.rows[2]) << 40 |
+						(u64) rbit8(xroll_state.rows[3]) << 32 |
+						(u64) rbit8(xroll_state.rows[4]) << 24 |
+						(u64) rbit8(xroll_state.rows[5]) << 16 |
+						(u64) rbit8(xroll_state.rows[6]) <<  8 |
+						(u64) rbit8(xroll_state.rows[7]);
 
-	if (!cfg.quiet)
-		printf("preroll = (%u, %u)\n", roll.x, roll.y);
+					if (BW_SEARCH_ONES_BETTER() ? val > best_val : val < best_val) {
+						roll = (Point8) {x, y};
+						best_tfm = tfm;
+						best_val = val;
+					}
+				} // foreach x roll
+			} // foreach y roll
+		} // foreach tfm
 
-	// TODO: for the diagonal only, do a completely different state index map than this.
-	//       you want to make "2x2" diamonds instead of boxes there.
+		state = Matx8_tfm(state, best_tfm);
+		state = Matx8_yroll(state, roll.y);
+		state = Matx8_xroll(state, roll.x);
+
+		if (!cfg.quiet)
+			printf("transformation = { op = \"%s (%u)\", roll = (%u, %u) }\n",
+				tfm_strs[best_tfm], best_tfm, roll.x, roll.y
+			);
+	} // if (1's better or 0's better)
 
 	u8 bit_idx = 0;
 
@@ -491,7 +509,7 @@ static FORCE_INLINE Matx8 *find_predecessors(Matx8 state) {
 	for (u8 i = 0; i < 8; i++) {
 		cnt = advance_ptlstate(
 			&tmp, cnt,
-			states_for_bit(i, (state.matx >> i) & 1),
+			states_for_bit(i, (state.rows[0] >> i) & 1),
 			bit_idx++
 		);
 
@@ -500,7 +518,7 @@ static FORCE_INLINE Matx8 *find_predecessors(Matx8 state) {
 
 		cnt = advance_ptlstate(
 			&tmp, cnt,
-			states_for_bit(i + 8, (state.matx >> i + 8) & 1),
+			states_for_bit(i + 8, (state.rows[1] >> i) & 1),
 			bit_idx++
 		);
 
@@ -527,11 +545,12 @@ done:
 		roll.x = (8 - roll.x) & 7;
 		roll.y = (8 - roll.y) & 7;
 
-		if (roll.x > 7 || roll.y > 7)
-			__builtin_unreachable();
+		// turn the transformation into the inverse transformation.
+		if      (best_tfm == TFM_ROT90 ) best_tfm = TFM_ROT270;
+		else if (best_tfm == TFM_ROT270) best_tfm = TFM_ROT90;
 
-		// I don't think the order matters, but undo
-		// them in reverse order just in case.
+		if (roll.x > 7 || roll.y > 7 || best_tfm >= sizeof(tfm_strs) / sizeof(*tfm_strs))
+			__builtin_unreachable();
 
 		if (roll.x != 0)
 			for (u64 i = 0; i < cnt; i++)
@@ -540,38 +559,50 @@ done:
 		if (roll.y != 0)
 			for (u64 i = 0; i < cnt; i++)
 				tmp[i] = Matx8_yroll(tmp[i], roll.y);
+
+		if (best_tfm != TFM_IDENTITY)
+			for (u64 i = 0; i < cnt; i++)
+				tmp[i] = Matx8_tfm(tmp[i], best_tfm);
 	}
 
-	Matx8 *out = (Matx8 *) malloc((cnt + 1) * sizeof(Matx8)) + 1;
-	OOM(out, 3);
-
-	out[-1].matx = cnt;
-	memcpy(out, tmp, cnt * sizeof(Matx8));
-
-	return out;
+	// point to the element count
+	tmp[-1].matx = cnt;
+	return (StateBuffer *) (tmp - 1);
 }
 
-static FORCE_INLINE Matx8 *advance_predecessors(const Matx8 *const prev_states) {
-	Matx8 *running_states = (Matx8 *) malloc(2 * sizeof(Matx8)) + 1;
-	u64 running_cnt = 0;
+static FORCE_INLINE const StateBuffer *_find_predecessors1u(u64 state) {
+	return _find_predecessors1m((Matx8) {.matx = state});
+}
 
-	for (u64 i = 0; i < prev_states[-1].matx; i++) {
-		const Matx8 *new_states = find_predecessors(prev_states[i]);
+static const StateBuffer *_find_predecessors1sb(const StateBuffer *const prev) {
+	// returns a list of all the predecessors of all the given states
+	// frees the old buffer
+	StateBuffer *running = (StateBuffer *) malloc(sizeof(StateBuffer));
+	running->size = 0;
+
+	for (u64 i = 0; i < prev->size; i++) {
+		const StateBuffer *new = _find_predecessors1m(prev->states[i]);
 
 		// append the new states to the running states list
-		const u64 new_cnt = new_states[-1].matx;
-		if (new_cnt > 0) {
-			const u64 total_size = 1 + running_cnt + new_cnt;
-			running_states = (Matx8 *) realloc(running_states - 1, total_size * sizeof(Matx8)) + 1;
-			OOM(running_states, 4);
-			memcpy(running_states + running_cnt, new_states, new_cnt * sizeof(Matx8));
-			running_cnt = total_size - 1;
+		if (new->size > 0) {
+			running = (StateBuffer *) realloc(running, sizeof(StateBuffer) +
+				(running->size + new->size) * sizeof(Matx8));
+			OOM(running, 4);
+			memcpy(running->states + running->size, new->states, new->size * sizeof(Matx8));
+			running->size += new->size;
 		}
 
-		free((void *) (new_states - 1));
+		// if this is the first iteration, this step is redundant.
+		if (i != 0)
+			running->size = uniq(running->states, running->size);
 	}
 
-	running_states[-1].matx = uniq(running_states, running_cnt);
-	free((void *) (prev_states - 1));
-	return running_states;
+	free((void *) prev);
+	return running;
 }
+
+#define find_predecessors(x) _Generic((x),     \
+	u64                : _find_predecessors1u, \
+	Matx8              : _find_predecessors1m, \
+	const StateBuffer *: _find_predecessors1sb \
+)(x)

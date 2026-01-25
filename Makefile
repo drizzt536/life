@@ -8,11 +8,11 @@
 # it works for sure with MinGW devkit 2.5 (GCC 15.2, binutils 2.45)
 # the MSYS2 version of GCC won't work because it is UCRT and not MSVCRT.
 
-VERSION := 1.2.0
+VERSION := 2.0.0
 
 CFLAGS     := -Werror -Wall -Wextra -Wno-parentheses -Wno-missing-profile -std=gnu23 \
 			-Iinclude -masm=intel -DPY_BASE=\"analyze\" -DVERSION=\"$(VERSION)\"
-COPTZ      := -fdelete-dead-exceptions -ffinite-loops -fgcse-las -fgcse-sm \
+COPTZ      := -Ofast -fdelete-dead-exceptions -ffinite-loops -fgcse-las -fgcse-sm \
 			-fipa-pta -fira-loop-pressure -flive-range-shrinkage -frename-registers \
 			-fshort-enums -ftree-loop-if-convert -ftree-vectorize -fvpt -fweb -fwrapv \
 			-fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-ident
@@ -34,13 +34,6 @@ TRUTH_TABLE_CMD := $$(python ./gen-ruleset.py -tt2 '$(RULESET)' | awk 'BEGIN {OR
 
 ifdef NO_VC
 	override RESERVE := long
-endif
-
-ifeq (OPTIMIZE, size)
-	COPTZ += -Os
-else
-	# default to optimizing for speed
-	COPTZ += -Ofast
 endif
 
 # architecture to optimize for
@@ -80,6 +73,10 @@ ifdef TIMER_PERIOD
 	CFLAGS += -DTIMER_PERIOD=$(TIMER_PERIOD)
 endif
 
+ifdef STEP_MOD_THRESH
+	CFLAGS += -DSTEP_MOD_THRESH=$(STEP_MOD_THRESH)
+endif
+
 ifdef TABLE_BITS
 	CFLAGS += -DTABLE_BITS=$(TABLE_BITS)
 endif
@@ -106,10 +103,6 @@ endif
 
 ifdef TIMER
 	CFLAGS += -DTIMER=$(TIMER)
-endif
-
-ifdef FAST_HASHING
-	CFLAGS += -DFAST_HASHING=$(FAST_HASHING)
 endif
 
 ifdef HELP
@@ -155,7 +148,7 @@ req-nasm:
 	echo "# nasm found"
 
 req-python:
-	@if ! command -v python > /dev/null; then \
+	@if ! command -v python > /dev/null; then  \
 		echo "# program not found: \`python\`"; \
 		exit 1; \
 	fi; \
@@ -205,9 +198,9 @@ endif # require
 $(ZIPFILE): life.exe life-launch.exe req-7z analyze.py req-linux
 	7z a -t7z -mx=9 -bso0 -bsp0 $@ life.exe life-launch.exe analyze.py
 
-	@z=$$(stat -c %s $(ZIPFILE));     \
-	a=$$(stat -c %s analyze.py);      \
-	b=$$(stat -c %s life.exe);        \
+	@z=$$(stat -c %s $(ZIPFILE));  \
+	a=$$(stat -c %s analyze.py);    \
+	b=$$(stat -c %s life.exe);       \
 	c=$$(stat -c %s life-launch.exe); \
 	awk "BEGIN {print \"# 7zip reduction: \" 100 - $$z*100 / ($$a + $$b + $$c) \"%\"}"
 
@@ -236,23 +229,26 @@ prof.exe: init-crt.o $(CFILES) ruleset.tmp req-gcc
 	truth_table=$(TRUTH_TABLE_CMD); \
 	gcc -fprofile-generate -DPROFILING=1 $(CFLAGS) $$truth_table $(COPTZ) $< life.c -o $@
 
-# TODO: find a state that actually does have a second level predecessor state.
 life.gcda: prof.exe req-linux
 ifeq ($(QUIET),true)
 	./$< -H nrun 2500000 &> /dev/null
-	./$< -H step 0x1fffffffffff7f00 -2 &> /dev/null
-	./$< -q step 0xffffffffffffffff -1 &> /dev/null
-	./$<    step 0xb9078411668e300d 423 &> /dev/null
+	./$< -H bwsr 0x5e315607a2200650 2 &> /dev/null
+	./$< -q bwsr 0xffffffffffffffff 1 &> /dev/null
+	./$< -d . step 0xb9078411668e300d 18446744073709551495 &> /dev/null
+	./$< step 0xb112a93586a4b278 &> /dev/null
+	./$< bwrn 24 &> /dev/null
 	./$< -v &> /dev/null
 else
 	./$< -H nrun 2500000
-	./$< -H step 0x1fffffffffff7f00 -2
-	./$< -q step 0xffffffffffffffff -1
-	./$<    step 0xb9078411668e300d 423
+	./$< -H bwsr 0x5e315607a2200650 2
+	./$< -q bwsr 0xffffffffffffffff 1
+	./$< -d . step 0xb9078411668e300d 18446744073709551495
+	./$< step 0xb112a93586a4b278 &> /dev/null
+	./$< bwrn 24
 	./$< -v
 endif
 	@# just spam a bunch of flags to get profiling data on them
-	./$< -adfsSTuh '.' '#' f1 0 62 f2 &> /dev/null
+	./$< -adfsSTuh '-' '@' f1 0 90 f2 &> /dev/null
 
 	mv prof-life.gcda $@
 

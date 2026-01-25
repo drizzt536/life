@@ -17,19 +17,21 @@ static char *_sprint_du64_3(char *buffer, u64 x, const char sep) {
 	unlikely_if (buffer == NULL)
 		return NULL;
 
-	u8 i = 26; // 26 == strlen("18,446,744,073,709,551,615")
+	constexpr u64 MAXLEN = __builtin_strlen("18,446,744,073,709,551,615");
+
+	u8 i = MAXLEN;
 	buffer[i] = '\0';
 
 	do {
 		buffer[--i] = '0' + (x % 10);
 		x /= 10;
 
-		if ((i & 3) == 3) // modulo 4 because the separator is every 4 characters.
+		if ((i & 3) == (MAXLEN + 1 & 3)) // modulo 4 because the separator is every 4 characters.
 			buffer[--i] = sep;
 	} until (x == 0);
 
-	// if the current i % 4 == 2, then the most recent character is a separator that needs to be skipped.
-	if ((i & 3) == 2)
+	// the most recent character is a separator that needs to be skipped.
+	if ((i & 3) == (MAXLEN & 3))
 		i++;
 
 	return buffer + i;

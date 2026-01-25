@@ -76,11 +76,6 @@
 	#define ERRLOG_OOM_EC 12 // same as ENOMEM from <errno.h>
 #endif
 
-#ifndef ERRLOG_INVALID_FILE_EC
-	// the program exit code to be given on invalid file errors.
-	#define ERRLOG_INVALID_FILE_EC 1 // EXIT_FAILURE from <stdlib.h>
-#endif
-
 // internal color print versions
 #define _FPRINTF_COLOR(fp, color, loglvl, args...) ({ \
 	ERRLOG_LEVEL > (loglvl) ? 0 : ({                  \
@@ -127,8 +122,7 @@
 #define enputs(str) enfputs(stderr, str)
 #define edputs(str) edfputs(stderr, str)
 
-
-// verbose. might not even print anything if there isn't space for a stack frame.
+// verbose
 #define OUT_OF_MEMORY_V(mem, code) ({        \
 	if ((mem) == NULL) {                      \
 		eprintf("Out of Memory. code: %llu\n", \
@@ -143,12 +137,6 @@
 		exit(ERRLOG_OOM_EC);      \
 })
 
-#define OUT_OF_MEMORY(mem, code, v) ( \
-	v /* verbose */ ?                  \
-		OUT_OF_MEMORY_V(mem, code) :    \
-		OUT_OF_MEMORY_S(mem)             \
-)
-
 #define _VA_ID_IGNORED(...)
 #define _VA_ID(x...) x
 #define _VA_ID_IF(suffix, x...) _VA_ID ## suffix(x)
@@ -157,33 +145,3 @@
 // e.g. #define f(x, y...) VA_IF(f2(x, y), f1(x), y)
 
 #define OOM(mem, code...) VA_IF(OUT_OF_MEMORY_V(mem, code), OUT_OF_MEMORY_S(mem), code)
-
-// verbose
-#define VALIDATE_FILE_V(path, code) ({               \
-	printf("validating" ERRLOG_FILE_VAL_SPACES ": "); \
-	                                                   \
-	if (access((path), 0 /* F_OK on POSIX */) == -1) {  \
-		eprintf("'%s' cannot be accessed. code: %llu\n", \
-			(path), (unsigned long long int) (code));     \
-		exit(ERRLOG_INVALID_FILE_EC);                      \
-	}                                                       \
-	                                                         \
-	printf("'%s' available\n", (path));                       \
-})
-
-// silent
-#define VALIDATE_FILE_S(path) ({    \
-	if (access((path), 0) == -1)     \
-		exit(ERRLOG_INVALID_FILE_EC); \
-})
-
-// I don't remember why I implemented this like this, but I am sure I had a good reason.
-#define VALIDATE_FILE(path, code, v) ( \
-	v /* verbose */ ?                   \
-		VALIDATE_FILE_V(path, code) :    \
-		VALIDATE_FILE_S(path)             \
-)
-
-/*#define VALIDATE_FILE(path, code...) \
-	VA_IF(VALIDATE_FILE_V(path, code), VALIDATE_FILE_S(path), code)
-*/

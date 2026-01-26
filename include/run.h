@@ -248,7 +248,7 @@ static FORCE_INLINE void _run_once0(void) {
 #define RUN_2() ({run_once(); run_once();})
 #define RUN_8() ({RUN_2(); RUN_2(); RUN_2(); RUN_2();})
 
-static FORCE_INLINE void run_forever(void) {
+static void run_forever(void) {
 #if TIMER
 	u64 last_reset = (u64) _time64(NULL);
 start:

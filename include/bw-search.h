@@ -42,11 +42,6 @@ typedef struct {
 	Matx8 states[];
 } StateBuffer;
 
-// 2d 8-bit point
-typedef struct {
-	u8 x, y;
-} Point8;
-
 constexpr u8 spread4_lut[16] = {
 	0b00000000, 0b00000001, 0b00000100, 0b00000101,
 	0b00010000, 0b00010001, 0b00010100, 0b00010101,
@@ -226,6 +221,8 @@ static Matx8 *_gen_combos(Matx8 *restrict out, Matx8 *restrict arr, Matx8 center
 
 	while (true) {
 		// combine the states together and output the state
+		// TODO: make this a compile-time check based on something like
+		//       max(ALIVE_PRED_COUNT(), DEAD_PRED_COUNT()) * 8
 		if ((u64) (out - (Matx8 *) hashtable.scratch) >= SCRATCH_SIZE / sizeof(u64)) {
 			// this shouldn't happen unless the hash table is tuned to be too small.
 			// there shouldn't be more than a few hundred items.

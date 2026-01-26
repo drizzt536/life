@@ -106,7 +106,7 @@ static FORCE_INLINE void _bws_run_once1(const bool quiet) {
 #define bws_run_once(quiet, state...) \
 	VA_IF(_bws_run_once2(quiet, state), _bws_run_once1(quiet), state)
 
-static FORCE_INLINE void bws_run(u64 n) {
+static void bws_run(u64 n) {
 	const bool original_quiet = cfg.quiet;
 	cfg.quiet = true;
 

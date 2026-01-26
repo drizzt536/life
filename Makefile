@@ -8,7 +8,7 @@
 # it works for sure with MinGW devkit 2.5 (GCC 15.2, binutils 2.45)
 # the MSYS2 version of GCC won't work because it is UCRT and not MSVCRT.
 
-VERSION := 2.1.0
+VERSION := 2.1.1
 
 CFLAGS     := -Werror -Wall -Wextra -Wno-parentheses -Wno-missing-profile -std=gnu23 \
 			-Iinclude -masm=intel -DPY_BASE=\"analyze\" -DVERSION=\"$(VERSION)\"
@@ -91,6 +91,15 @@ endif
 
 ifdef RAND_BUF_LEN
 	CFLAGS += -DRAND_BUF_LEN=$(RAND_BUF_LEN)
+
+	ifeq ($(RAND_BUF_LEN), 1)
+		ifneq ($(ISA),native)
+			# the unbuffered version uses RDRAND, and none of the versions
+			# come with RDRAND. Also, If you give ISA=native and your
+			# machine doesn't have RDRAND, that should be an error.
+			CFLAGS += -mrdrnd
+		endif
+	endif
 endif
 
 ifdef ARENA_LEN
@@ -109,6 +118,10 @@ ifdef HELP
 	CFLAGS += -DHELP=$(HELP)
 endif
 
+ifdef BWSEARCH
+	CFLAGS += -DBWSEARCH=$(BWSEARCH)
+endif
+
 ifdef DEBUG
 	CFLAGS += -DDEBUG=$(DEBUG)
 endif
@@ -122,11 +135,11 @@ ifdef RULESET
 	CFLAGS += -DNEXT_COND="$$(cat ruleset.tmp)"
 endif
 
-ifeq ($(SHELL32),false)
+ifdef SHELL32
 	ifeq ($(PROFILE),false)
-		CFLAGS += -DSHELL32=0
+		CFLAGS += -DSHELL32=$(SHELL32)
 	else
-		CFLAGS_LIFE_O += -DSHELL32=0
+		CFLAGS_LIFE_O += -DSHELL32=$(SHELL32)
 	endif
 endif
 
@@ -240,21 +253,25 @@ prof.exe: init-crt.o $(CFILES) ruleset.tmp req-gcc
 life.gcda: prof.exe req-linux
 ifeq ($(QUIET),true)
 	./$< -H nrun 2500000 &> /dev/null
+	./$< -d . step 0xb9078411668e300d 18446744073709551495 &> /dev/null
+	./$< step 0xb112a93586a4b278 7 &> /dev/null
+ifeq ($(BWSEARCH),true)
 	./$< -H bwsr 0x5e315607a2200650 2 &> /dev/null
 	./$< -q bwsr 0xffffffffffffffff 1 &> /dev/null
-	./$< -d . step 0xb9078411668e300d 18446744073709551495 &> /dev/null
-	./$< step 0xb112a93586a4b278 &> /dev/null
 	./$< bwrn 24 &> /dev/null
+endif # BWSEARCH
 	./$< -v &> /dev/null
-else
+else # QUIET == false branch
 	./$< -H nrun 2500000
+	./$< -d . step 0xb9078411668e300d 18446744073709551495
+	./$< step 0xb112a93586a4b278 7 &> /dev/null
+ifeq ($(BWSEARCH),true)
 	./$< -H bwsr 0x5e315607a2200650 2
 	./$< -q bwsr 0xffffffffffffffff 1
-	./$< -d . step 0xb9078411668e300d 18446744073709551495
-	./$< step 0xb112a93586a4b278 &> /dev/null
 	./$< bwrn 24
+endif # BWSEARCH
 	./$< -v
-endif
+endif # QUIET
 	@# just spam a bunch of flags to get profiling data on them
 	./$< -adfsSTuh '-' '@' f1 0 90 f2 &> /dev/null
 

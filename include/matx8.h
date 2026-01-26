@@ -109,7 +109,7 @@ static FORCE_INLINE u64 Matx8__yroll_u(const u64 state, u8 y) {
 	return ROR(state, (y & 7) << 3);
 }
 
-static FORCE_INLINE Matx8 Matx8__xflip(Matx8 this) {
+static Matx8 Matx8__xflip(Matx8 this) {
 	// I could also do a transpose, y flip, transpose, but I think that
 	// since each line operates on a separate byte, the CPU will likely
 	// execute like 2-4 of the lines in parallel.
@@ -167,7 +167,7 @@ static FORCE_INLINE u64 Matx8__rot90_u(u64 state) {
 }
 
 static FORCE_INLINE u64 Matx8__rot180_u(u64 state) {
-	// unfortunately, the matrix xflip has to be defined first
+	// unfortunately, the matrix xflip has to be defined before the integer one
 	// so this has to convert to a matrix and use that one.
 	return Matx8__xflip((Matx8) {
 		.matx = Matx8__yflip_u(state)
@@ -178,7 +178,7 @@ static FORCE_INLINE u64 Matx8__rot270_u(u64 state) {
 	return Matx8__yflip_u(Matx8__adtrs_u(state));
 }
 
-static FORCE_INLINE u64 Matx8__tfm_u(u64 state, const u8 tfm) {
+static u64 Matx8__tfm_u(u64 state, const u8 tfm) {
 	_Static_assert(sizeof(tfm_strs) / sizeof(*tfm_strs) == 8,
 		"transform count has changed. this code assumes it is 8.");
 

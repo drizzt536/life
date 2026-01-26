@@ -13,6 +13,10 @@
 //       "trials": [<etrials>, <pdtrials>]
 //       probably do this before implementing the ruleset.
 // TODO: consider making a second version of life-launch for predecessor trial testing.
+// TODO: consider letting the user pass more than one input state to `bwsr`
+// TODO: make TIMER=true the default instead of TIMER=false
+//       consider removing the macro variable and making it always true.
+// TODO: also use the timer in `bws_run_forever`.
 
 ///////////////////////////////// config start ////////////////////////////////
 
@@ -55,11 +59,6 @@
 	#define TABLE_BITS		9
 #endif
 
-#ifndef SHELL32
-	// default to using init_args with SHELL32.dll
-	#define SHELL32 1
-#endif
-
 // 512 makes them one page of memory.
 // these have to be at least 133 and 424 respectively.
 #ifndef PERIOD_LEN
@@ -88,26 +87,6 @@
 	#define DATAFILE "data.json"
 #endif
 
-////////////////////////////////// config end /////////////////////////////////
-
-#ifdef _MSC_VER
-	// I don't care if you are using clang-cl or something. that counts in my eyes.
-	#error Silly Microsoft sheep. Visual Studio will not work here. Use a real C compiler.
-#endif
-
-#ifndef _WIN64
-	// NOTE: windows is always little endian, so I don't have to check that as well.
-	#error This program will only compile on 64-bit windows
-#endif
-
-#ifndef __MINGW64__
-	#error This program will only compile properly with a MinGW compiler.
-#endif
-
-#ifndef __GNUC__
-	#error "This program only works with compilers that allow GNU extensions."
-#endif
-
 #ifndef CLIPBOARD
 	// true  => include the -c flag
 	// false => no -c flag (less DLL imports)
@@ -126,10 +105,41 @@
 	#define HELP true
 #endif
 
+#ifndef BWSEARCH
+	// true => include bwsr and bwrn commands
+	// false => don't.
+	#define BWSEARCH true
+#endif
+
 #ifndef DEBUG
 	// true => print extra collision data when the program exits.
 	// false => don't.
 	#define DEBUG false
+#endif
+
+#ifndef SHELL32
+	// default to using init_args with SHELL32.dll
+	#define SHELL32 true
+#endif
+
+////////////////////////////////// config end /////////////////////////////////
+
+#ifdef _MSC_VER
+	// I don't care if you are using clang-cl or something. that counts in my eyes.
+	#error Silly Microsoft sheep. Visual Studio will not work here. Use a real C compiler.
+#endif
+
+#ifndef _WIN64
+	// NOTE: windows is always little endian, so I don't have to check that as well.
+	#error This program will only compile on 64-bit windows
+#endif
+
+#ifndef __MINGW64__
+	#error This program will only compile properly with a MinGW compiler.
+#endif
+
+#ifndef __GNUC__
+	#error "This program only works with compilers that allow GNU extensions."
 #endif
 
 #ifndef VERSION
@@ -232,12 +242,12 @@
 
 // EXIT_SUCCESS == 0
 // EXIT_FAILURE == 1
-#define EXIT_DATAFILE		3 // something about accessing the datafile
-#define EXIT_CMD_INVOP		4 // invalid command operand (or wrong number)
-#define EXIT_FLG_INVOP		5 // invalid flag operand (or wrong number)
-#define EXIT_CMD_UNKWN		6 // unknown or blank command
-#define EXIT_FLG_UNKWN		7 // unknown or blank flag
-#define EXIT_OOM 			8 // out of heap memory
+#define EXIT_DATAFILE		2 // something about accessing the datafile
+#define EXIT_CMD_INVOP		3 // invalid command operand (or wrong number)
+#define EXIT_FLG_INVOP		4 // invalid flag operand (or wrong number)
+#define EXIT_CMD_UNKWN		5 // unknown or blank command
+#define EXIT_FLG_UNKWN		6 // unknown or blank flag
+#define EXIT_OOM 			7 // out of heap memory
 
 #undef stdout
 #undef stderr
@@ -250,6 +260,11 @@ static FILE *stdout = NULL, *stderr = NULL;
 #include "matx8.h"
 #include "matx8-next.h"  // Matx8_next
 #include "table.h"
+
+// 2d 8-bit point
+typedef struct {
+	u8 x, y;
+} Point8;
 
 typedef enum <% EMPTY, CONST, CYCLE %> sttyp_t; // state type
 
@@ -339,19 +354,21 @@ static const char *const help_string =
 	"\n    (enter), fS: space, fT: tab."
 	"\n"
 	"\n    flags can be coalesced together, e.g. `-fsquT <s> <u> <T>`."
-	"\n    --help can't be coalesced with anything, and must be passed by itself."
-	"\n    any flags must appear before the command."
+	"\n    flags must appear before the command."
 	"\n"
 	"\ncommands:"
 	"\n    help           alias of `-h` flag"
-	"\n    run,nrun       runs simulations and gives in-depth statistics"
-	"\n    sim,sim1,nsim  runs simulations visually without statistics"
-	"\n    step S [N]     step to the next state and print out the result"
-	"\n                   N is the number of steps to take (defaults to 1)."
-	"\n    bwsr S [N]     backwards search to find all Nth-generation"
-	"\n                   ancestors to a given state. N defaults to 1."
-	"\n    bwrn [N]       run N random trials on predecessor counts. N defaults to 1."
-	"\n    tfm S T [X Y]  apply a transformation and an optional translation."
+	"\n    run [S...]     runs simulations on given states and returns data histograms"
+	"\n    nrun [N]       runs N random trials and returns data histograms"
+	"\n    sim [S...]     runs simulations visually on all given states"
+	"\n    nsim [N]       runs N random trials and shows them visually"
+	"\n    sim1 [S]       traverse the given state until the stop key is pressed"
+	"\n    step S [N]     step to the next states N times and print out the result"
+#if BWSEARCH
+	"\n    bwsr S [N]     backwards search to find all Nth-generation ancestors to a given state"
+	"\n    bwrn [N]       runs N random trials on predecessor searches and count results"
+#endif
+	"\n    tfm S T [X Y]  apply a transformation (T) and an optional translation (X, Y)."
 	"\n                   options for T are given below. T happens before X and Y"
 	"\n"
 	"\n    dump           runs `./" PY_BASE ".py -s " DATAFILE "` and exit"
@@ -359,11 +376,16 @@ static const char *const help_string =
 	"\n    cnt            counts the number of objects in " DATAFILE
 	"\n    merg A B       runs `./" PY_BASE ".py -m A B` and exit"
 	"\n"
-	"\n    nrun, nsim, and bwrn take one argument with the number of trials to run."
-	"\n      'inf' can be given to make it run indefinitely."
-	"\n    run and sim take a list of integers for the starting states."
-	"\n    sim1 takes a single integer for the starting state."
-	"\n    all modes other than sim1 stop trials at the first repeated state."
+	"\n    N always defaults to 1 if not given."
+	"\n    sim and run default to a random state if no state is given."
+	"\n    run, nrun, sim, and nsim stop traversing when a repeat state is found."
+	"\n    'inf' can be given to nrun"
+#if BWSEARCH
+	", nsim, and bwrn"
+#else
+	" and nsim"
+#endif
+	" to make them run until the stop key is given."
 	"\n"
 	"\nbuild config:"
 	"\n    NEIGHBORHOOD="
@@ -457,8 +479,11 @@ static void bell(void) { likely_if (!cfg.silent) putchar('\x07'); }
 #include "summary.h"
 #include "sim.h"
 #include "run.h"
-#include "bw-search.h"
-#include "bw-run.h"
+
+#if BWSEARCH
+	#include "bw-search.h"
+	#include "bw-run.h"
+#endif
 
 #if DEBUG
 static void log_collisions(void) {
@@ -595,7 +620,7 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 						// parse stuff like -s fn as -s 110
 						// basically make it uppercase and use that as the key code
 						if ('a' <= operand[1] && operand[1] <= 'z') {
-							*pkey = operand[1] & ~32;
+							*pkey = operand[1] & ~32; // set uppercase
 							break;
 						}
 						else
@@ -638,11 +663,19 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 			case '?':
 				goto help_flag;
 			case 'v':
+			#if HELP
 				// NOTE: this works because `help_string` starts with `"life v" VERSION`
 				if (!cfg.quiet)
 					printf("%.*s\n", 6 + (i32) __builtin_strlen(VERSION), help_string);
 				else likely_if (!cfg.silent)
 					printf("%.*s\n", (i32) __builtin_strlen(VERSION), help_string + 6);
+			#else
+				// store a separate string.
+				if (!cfg.quiet)
+					puts("life v" VERSION);
+				else likely_if (!cfg.silent)
+					puts(VERSION);
+			#endif
 				exit(EXIT_SUCCESS);
 			default:
 				goto flag_unknown;
@@ -715,7 +748,6 @@ void init_crt(void);
 #else
 #include <corecrt_startup.h>
 #endif
-
 
 #if PROFILING
 int main(void)
@@ -1001,6 +1033,8 @@ void mainCRTStartup(void)
 
 		break;
 	}
+#if BWSEARCH
+	case CHARS4_TO_U32('b', 'u', 's',  0 ):
 	case CHARS4_TO_U32('b', 'w', 's', 'r'): {
 		// backwards search
 		if (argc == 0)
@@ -1035,6 +1069,7 @@ void mainCRTStartup(void)
 
 		break;
 	}
+	case CHARS4_TO_U32('b', 'u', 'r', 'n'):
 	case CHARS4_TO_U32('b', 'w', 'r', 'n'):
 		// backwards run
 		init_bws_hist2();
@@ -1075,6 +1110,7 @@ void mainCRTStartup(void)
 			printf("    %llu: %llu\n", bws_hist2->list[i].key, bws_hist2->list[i].cnt);
 
 		break;
+#endif
 	case CHARS4_TO_U32('t', 'f', 'm',  0 ): {
 		if (argc == 0)
 			__builtin_unreachable();

@@ -8,7 +8,7 @@
 # it works for sure with MinGW devkit 2.5 (GCC 15.2, binutils 2.45)
 # the MSYS2 version of GCC won't work because it is UCRT and not MSVCRT.
 
-VERSION := 2.0.0
+VERSION := 2.1.0
 
 CFLAGS     := -Werror -Wall -Wextra -Wno-parentheses -Wno-missing-profile -std=gnu23 \
 			-Iinclude -masm=intel -DPY_BASE=\"analyze\" -DVERSION=\"$(VERSION)\"
@@ -120,6 +120,14 @@ endif
 ifdef RULESET
 	CFLAGS += -DRULESET=\"$(RULESET)\"
 	CFLAGS += -DNEXT_COND="$$(cat ruleset.tmp)"
+endif
+
+ifeq ($(SHELL32),false)
+	ifeq ($(PROFILE),false)
+		CFLAGS += -DSHELL32=0
+	else
+		CFLAGS_LIFE_O += -DSHELL32=0
+	endif
 endif
 
 ZIPFILE := life-v$(VERSION)-$(ISA).7z
@@ -274,8 +282,14 @@ analyze.py: analysis.py req-linux req-python
 	mv $<c $@
 	@echo "# built $@ for $$(python --version)"
 
+ifeq ($(SHELL32),false)
+life.exe: life.o req-binutils req-vcbtools
+	ld $(LDFLAGS) life.o $(LDLIBS) -o $@
+else
 life.exe: init-crt.o life.o req-binutils req-vcbtools
 	ld $(LDFLAGS) init-crt.o life.o $(LDLIBS) -o $@
+endif # SHELL32
+
 ifneq ($(RESERVE),long)
 	editbin -nologo -stack:32768,4096 $@
 endif

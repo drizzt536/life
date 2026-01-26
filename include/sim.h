@@ -92,7 +92,7 @@ static void _cli_sim2(const u64 trial, const Matx8 start_state) {
 	printf("\e[4;22Hs=%016llx", start_state.matx);
 	printf("\e[5;23Haborting");
 	printf("\e[11;21H");
-	exit(0);
+	exit(EXIT_SUCCESS);
 
 sim_done:
 	printf("\e[4;22Hs=0x%016llx", start_state.matx);

@@ -209,7 +209,7 @@ static void give_summary(const bool returns) {
 		SomeMoreWindowsFuckassBullshitGlobalMemoryNonsenseIDontEvenKnowWhatThisIsFor(windows_fuckass_bullshit_global_memory_handle_nonsense);
 
 		void *mutex = CreateMutexA(NULL, false, "LifeClip");
-		const bool newMutex = GetLastError() == ERROR_ALREADY_EXISTS;
+		const bool newMutex = GetLastError() != ERROR_ALREADY_EXISTS;
 		do {
 			WaitForMutexUnlock(mutex, ~0u);
 			// extra wait so previous clipboard values can settle to the real value.
@@ -257,7 +257,7 @@ static void give_summary(const bool returns) {
 			if (error != 13 /* EACCES */) {
 				eprintf("can't %s %s: errno=%u.\n", "lock", DATAFILE, error);
 
-				exit(3);
+				exit(EXIT_DATAFILE);
 			}
 
 			Sleep(200); // 5 tries per second
@@ -284,5 +284,5 @@ static void give_summary(const bool returns) {
 	}
 
 	if (!returns)
-		exit(0);
+		exit(EXIT_SUCCESS);
 }

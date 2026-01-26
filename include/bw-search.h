@@ -230,7 +230,7 @@ static Matx8 *_gen_combos(Matx8 *restrict out, Matx8 *restrict arr, Matx8 center
 			// this shouldn't happen unless the hash table is tuned to be too small.
 			// there shouldn't be more than a few hundred items.
 			eputs("scratch buffer overflow: too many combos.");
-			exit(ERRLOG_OOM_EC);
+			exit(EXIT_OOM);
 		}
 
 		// add the partial state to the output list

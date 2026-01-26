@@ -1,43 +1,24 @@
 #pragma once
-#define ERROR_PRINT_H
+#define ERRLOG_H
 
 // requires C23 for __VA_OPT__
 
-#ifndef ERROR_PRINT_NOINCLUDE
-	// in case you are using `-nostdlib` and want to manually prototype everything.
-	// this way it won't double include "stdio.h" and <stdio.h>, for example.
-	#include <stdlib.h> // exit
-	#include <stdio.h> // printf, fprintf, stdout, stderr
-
-	#ifdef _WIN32
-		#include <fcntl.h> // io.h but with exta stuff
-		#ifdef _UCRT
-			// this version is just objectively better when available.
-			#define access _access_s
-		#else
-			#define access _access
-		#endif
-	#else
-		#include <unistd.h> // access
-	#endif
-#endif
-
-#ifdef ERROR_PRINT_NO_ANSI
+#ifdef ERRLOG_NO_ANSI
 	// use empty strings for the same semantics
-	#define RGB_STR(r, g, b) ""
+	#define RGB_STR(r, g, b)  ""
 	#define ANSI_COLOR(color) ""
-	#define ANSI_RESET() ""
+	#define ANSI_RESET()      ""
 
 	// `(void) 0` instead of nothing so you still need to use a semicolon.
-	#define CON_COLOR(color) ((void) 0)
-	#define CON_RESET()      ((void) 0)
+	#define FCON_COLOR(color) ((void) 0)
+	#define FCON_RESET()      ((void) 0)
 #else
-	#define RGB_STR(r, g, b) #r ";" #g ";" #b
+	#define RGB_STR(r, g, b)  #r ";" #g ";" #b
 	#define ANSI_COLOR(color) "\e[38;2;" color "m"
-	#define ANSI_RESET() "\e[0m"
+	#define ANSI_RESET()      "\e[0m"
 
-	#define CON_COLOR(color) printf(ANSI_COLOR(color))
-	#define CON_RESET()      printf(ANSI_RESET())
+	#define FCON_COLOR(fp, color) fprintf(fp, ANSI_COLOR(color))
+	#define FCON_RESET(fp)        fprintf(fp, ANSI_RESET())
 #endif
 
 #define ANSI_RED    RGB_STR(166,  12,  26) // #A60C1A
@@ -63,14 +44,6 @@
 	#define ERRLOG_LEVEL ERRLOG_NOTE
 #endif
 
-#ifndef ERRLOG_FILE_VAL_SPACES
-	// the string with the spaces before the colon in `VALIDATE_FILE_V`
-	// technically they can be things other than spaces, but that is weird.
-
-	// printf("validating" ERRLOG_FILE_VAL_SPACES ": ");
-	#define ERRLOG_FILE_VAL_SPACES ""
-#endif
-
 #ifndef ERRLOG_OOM_EC
 	// the program return code to be given on out-of-memory errors.
 	#define ERRLOG_OOM_EC 12 // same as ENOMEM from <errno.h>
@@ -79,29 +52,14 @@
 // internal color print versions
 #define _FPRINTF_COLOR(fp, color, loglvl, args...) ({ \
 	ERRLOG_LEVEL > (loglvl) ? 0 : ({                  \
-		CON_COLOR(color);                             \
+		FCON_COLOR(fp, color);                        \
 		const int return_code = fprintf((fp), args);  \
-		CON_RESET();                                  \
+		FCON_RESET(fp);                               \
 		return_code;                                  \
 	});                                               \
 })
 
 // external color print versions
-#define fprintf_color(fp, color, args...) \
-	_FPRINTF_COLOR(fp, color, /* true */ ERRLOG_LEVEL + 1, args)
-#define printf_color(color, args...) fprintf_color(stdout, color, args)
-
-#define fputs_color(fp, color, str) ({      \
-	CON_COLOR(color);                       \
-	const int e = fprintf(fp, "%s\n", str); \
-	/* fputs doesn't add a newline. And  */ \
-	/* has the string before the stream? */ \
-	/* That is retarded so I fixed it.   */ \
-	CON_RESET();                            \
-	e;                                      \
-})
-#define puts_color(color, str) fputs_color(stdout, color, str)
-
 #define efprintf(fp, args...)  _FPRINTF_COLOR(fp, ANSI_RED   , ERRLOG_FATAL, args)
 #define ewfprintf(fp, args...) _FPRINTF_COLOR(fp, ANSI_ORANGE, ERRLOG_WARN , args)
 #define enfprintf(fp, args...) _FPRINTF_COLOR(fp, ANSI_YELLOW, ERRLOG_NOTE , args)
@@ -122,19 +80,12 @@
 #define enputs(str) enfputs(stderr, str)
 #define edputs(str) edfputs(stderr, str)
 
-// verbose
-#define OUT_OF_MEMORY_V(mem, code) ({        \
+#define OOM(mem, code) ({                    \
 	if ((mem) == NULL) {                      \
 		eprintf("Out of Memory. code: %llu\n", \
 			(unsigned long long int) (code));   \
 		exit(ERRLOG_OOM_EC);                     \
 	}                                             \
-})
-
-// silent
-#define OUT_OF_MEMORY_S(mem) ({ \
-	if ((mem) == NULL)           \
-		exit(ERRLOG_OOM_EC);      \
 })
 
 #define _VA_ID_IGNORED(...)
@@ -143,5 +94,3 @@
 #define VA_IF(t, f, ...) __VA_OPT__(t) _VA_ID_IF(__VA_OPT__(_IGNORED), f)
 // use VA_IF for macro overloading, like for 1-arg and a 2-arg versions of a macro.
 // e.g. #define f(x, y...) VA_IF(f2(x, y), f1(x), y)
-
-#define OOM(mem, code...) VA_IF(OUT_OF_MEMORY_V(mem, code), OUT_OF_MEMORY_S(mem), code)

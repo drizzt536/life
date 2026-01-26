@@ -11,3 +11,5 @@ Rulesets are something like `B<nums>/S<nums>`. The B numbers are the neighbors c
 <!-- intersting, ruleset B012568/S03478 has the longest condition, character wise -->
 
 for help on individual programs, use the `-h` flag. Except for `life-launch.exe` which doesn't take any arguments and always runs `life -Hf nrun inf`.
+
+To make `life.c` call to the regular python code instead of version-specific compiled bytecode, find `analysis.py` and rename it to `analyze.py`. Then is should work identically the same, just potentially slower at startup.

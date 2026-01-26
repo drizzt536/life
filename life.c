@@ -4,6 +4,16 @@
 // for unions. C just reinterprets the bits as the other type with no change,
 // even if the standard doesn't technically guarantee that is what happens.
 
+// TODO: put the ruleset somewhere in the data.json file.
+//       in the python file, only collapse objects with the same ruleset
+//       or maybe include the ruleset in the filename?
+// TODO: put predecessor data into the JSON object as well.
+//       "predecessors": {"key": value, ...}
+//       maybe change "trials" to "etrials" & "pdtrials", or maybe do
+//       "trials": [<etrials>, <pdtrials>]
+//       probably do this before implementing the ruleset.
+// TODO: consider making a second version of life-launch for predecessor trial testing.
+
 ///////////////////////////////// config start ////////////////////////////////
 
 #ifndef ALIVE_CHAR_DEF
@@ -43,6 +53,11 @@
 // this has to be at least 2, or the program will not work.
 #ifndef TABLE_BITS
 	#define TABLE_BITS		9
+#endif
+
+#ifndef SHELL32
+	// default to using init_args with SHELL32.dll
+	#define SHELL32 1
 #endif
 
 // 512 makes them one page of memory.
@@ -125,8 +140,11 @@
 #define    PERIOD_MAX (-1 +    PERIOD_LEN)
 #define TRANSIENT_MAX (-1 + TRANSIENT_LEN)
 
-#ifndef PROFILING
+#ifdef PROFILING
+	#define access _access
+#else
 	#define PROFILING 0
+
 	// NOTE: the profiling mode is strange, because it automatically
 	//       links with msvcrt, and if you pass `-nostdlib -ffreestanding`,
 	//       then it just says it can't find any of the functions it needs,
@@ -136,8 +154,10 @@
 	// and add prototypes for functions specific to UCRT
 	#define _UCRT
 
+	#define access _access_s
+
 	// this has to be before the includes. The headers don't actually
-	// prototype _crt_at_quick_exit, so I have to make it prototype it.
+	// define _crt_at_quick_exit before the includes so the compiler prototypes it for me.
 	#define atexit		_crt_at_quick_exit
 	#define exit		quick_exit
 	#define strtoull	_strtoui64 // these are the same underlying function anyway
@@ -205,8 +225,27 @@
 #include <sys/stat.h>    // S_IWRITE
 #include <sys/locking.h> // LK_NBLCK
 
+#include <stdlib.h>
+#include <stdio.h>
+#include <fcntl.h> // io.h (_open, _write, ...), O_CREAT, ...
+
+
+// EXIT_SUCCESS == 0
+// EXIT_FAILURE == 1
+#define EXIT_DATAFILE		3 // something about accessing the datafile
+#define EXIT_CMD_INVOP		4 // invalid command operand (or wrong number)
+#define EXIT_FLG_INVOP		5 // invalid flag operand (or wrong number)
+#define EXIT_CMD_UNKWN		6 // unknown or blank command
+#define EXIT_FLG_UNKWN		7 // unknown or blank flag
+#define EXIT_OOM 			8 // out of heap memory
+
+#undef stdout
+#undef stderr
+static FILE *stdout = NULL, *stderr = NULL;
+
 #define ERRLOG_USE_RUNTIME_LOG_LEVEL
-#include "error-print.h" // stdlib.h, stdio.h, fcntl.h (io.h (_open, _write, ...), O_CREAT, ...)
+#define ERRLOG_OOM_EC EXIT_OOM
+#include "errlog.h"
 #include "windows.h"
 #include "matx8.h"
 #include "matx8-next.h"  // Matx8_next
@@ -356,12 +395,13 @@ static const char *const help_string =
 	"\n    DEBUG="			TOSTRING_EXPANDED(DEBUG)
 	"\n"
 	"\nexit codes:"
-	"\n    3  could not perform an operation on the datafile for an unknown reason"
-	"\n    4  command given with invalid arguments or the wrong amount of arguments"
-	"\n    5  flag given with invalid arguments or the wrong amount of arguments"
-	"\n    6  an unknown or empty command was given"
-	"\n    7  an unknown or empty flag was given"
-	"\n   12  program is out of heap memory"
+	"\n    " TOSTRING_EXPANDED(EXIT_FAILURE)   "  generic error, likely propogated from a subprocess."
+	"\n    " TOSTRING_EXPANDED(EXIT_DATAFILE)  "  could not perform an operation on the datafile for an unknown reason"
+	"\n    " TOSTRING_EXPANDED(EXIT_CMD_INVOP) "  command given with invalid operands or the wrong amount of operands"
+	"\n    " TOSTRING_EXPANDED(EXIT_FLG_INVOP) "  flag given with invalid operands or the wrong amount of operands"
+	"\n    " TOSTRING_EXPANDED(EXIT_CMD_UNKWN) "  an unknown or empty command was given"
+	"\n    " TOSTRING_EXPANDED(EXIT_FLG_UNKWN) "  an unknown or empty flag was given"
+	"\n    " TOSTRING_EXPANDED(EXIT_OOM)       "  program is out of heap memory"
 	"\n"
 	"\nstate interest bit meanings (for run modes):"
 	"\n    7  end state is not empty and is a perfect inverse of the start state"
@@ -603,7 +643,7 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 					printf("%.*s\n", 6 + (i32) __builtin_strlen(VERSION), help_string);
 				else likely_if (!cfg.silent)
 					printf("%.*s\n", (i32) __builtin_strlen(VERSION), help_string + 6);
-				exit(0);
+				exit(EXIT_SUCCESS);
 			default:
 				goto flag_unknown;
 			} // switch, (decide what flag operation to dispatch)
@@ -617,15 +657,15 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 help_flag:
 	likely_if (!cfg.silent)
 		puts(help_string);
-	exit(0);
+	exit(EXIT_SUCCESS);
 
 flag_no_operand:
 	eprintf("flag `-%c` (in `%s`) given without an operand.\n", *flag, full_flag);
-	exit(5);
+	exit(EXIT_FLG_INVOP);
 
 flag_invalid_operand:
 	eprintf("flag `-%c` (in `%s`) given with an invalid value `%s`\n", *flag, full_flag, operand);
-	exit(5);
+	exit(EXIT_FLG_INVOP);
 
 flag_empty:
 #if HELP
@@ -634,7 +674,7 @@ flag_empty:
 	eputs("empty flag given.");
 #endif
 
-	exit(7);
+	exit(EXIT_FLG_UNKWN);
 flag_unknown:
 #if HELP
 	eprintf("unknown flag `-%c` (in `%s`). use command `-h` for help.\n", *flag, full_flag);
@@ -642,12 +682,12 @@ flag_unknown:
 	eprintf("unknown flag `-%c` (in `%s`).\n", *flag, full_flag);
 #endif
 
-	exit(7);
+	exit(EXIT_FLG_UNKWN);
 }
 
 static _Noreturn void cmd_invalid_operand(const char *const restrict cmd, const u8 pos) {
 	eprintf("command `%s` given with an invalid value at position %u.\n", cmd, pos);
-	exit(4);
+	exit(EXIT_CMD_INVOP);
 }
 
 static Matx8 Matx8_tryparse(
@@ -655,6 +695,7 @@ static Matx8 Matx8_tryparse(
 	const char *const restrict cmd,
 	const u8 pos
 ) {
+	// this can't really go in `matx8.h` because it is specific to parsing from argv
 	char *str_end, *str = argv[pos];
 
 	// NOTE: if you pass something like "  0b10101", then it will not work as expected
@@ -669,7 +710,12 @@ static Matx8 Matx8_tryparse(
 	return (Matx8) {.matx = state};
 }
 
+#if SHELL32
 void init_crt(void);
+#else
+#include <corecrt_startup.h>
+#endif
+
 
 #if PROFILING
 int main(void)
@@ -683,6 +729,9 @@ void mainCRTStartup(void)
 	u32 argc;
 	char **argv;
 
+#if SHELL32
+	// I can't get rid of this entirely because the profiling build can't
+	// call the UCRTBASE initialization functions
 	asm volatile (
 		"call init_args\n\t"
 		"mov %0, edi\n\t"
@@ -691,12 +740,23 @@ void mainCRTStartup(void)
 		: // no inputs
 		: "rax", "rcx", "rdx", "r8", "r9", "rdi", "rsi", "cc", "memory"
 	);
+#else
+	_initialize_narrow_environment();
+	_configure_narrow_argv(_crt_argv_unexpanded_arguments);
+
+	argc = *__p___argc();
+	argv = *__p___argv();
+#endif
+
+	stdout = __acrt_iob_func(1);
+	stderr = __acrt_iob_func(2);
 
 	POP_ARG(); // the executable path is not needed.
 	do { // do while false
 		const bool flags_given = parse_flags(&argc, &argv);
 
 		if (argc != 0)
+			// there are more arguments left
 			break;
 
 		// example: `./life` should print the help text, but `./life -H` shouldn't
@@ -706,13 +766,13 @@ void mainCRTStartup(void)
 		#else
 			eputs("no command given.");
 		#endif
-			exit(6);
+			exit(EXIT_CMD_UNKWN);
 		}
 		else {
 			// no arguments given. just print the help text.
 			likely_if (!cfg.silent)
 				puts(help_string);
-			exit(0);
+			exit(EXIT_SUCCESS);
 		}
 	} while (false);
 
@@ -763,7 +823,7 @@ void mainCRTStartup(void)
 			n = 1;
 		else {
 			eprintf("command `%s` expected %s operands, found %u.\n", "nrun", "0 or 1", argc - 1);
-			exit(4);
+			exit(EXIT_CMD_INVOP);
 		}
 
 		for (u8 i = 0; i < (n & 7); i++)
@@ -807,7 +867,7 @@ void mainCRTStartup(void)
 			if (!cfg.quiet)
 				putchar('\n');
 		#endif
-			exit(0);
+			exit(EXIT_SUCCESS);
 		}
 
 		// run once for each state given
@@ -830,12 +890,12 @@ void mainCRTStartup(void)
 
 		if (argc == 1) {
 			cli_sim_one();
-			exit(0);
+			exit(EXIT_SUCCESS);
 		}
 
 		unlikely_if (argc > 2) {
 			eprintf("command `%s` expected %s operands, found %u.\n", "sim1", "0 or 1", argc - 1);
-			exit(4);
+			exit(EXIT_CMD_INVOP);
 		}
 
 		// argc == 2
@@ -865,11 +925,11 @@ void mainCRTStartup(void)
 			n = 1; // default to one trial.
 		else {
 			eprintf("command `%s` expected %s operands, found %u.\n", "nsim", "0 or 1", argc - 1);
-			exit(4);
+			exit(EXIT_CMD_INVOP);
 		}
 
 		unlikely_if (n == 0)
-			exit(0);
+			exit(EXIT_SUCCESS);
 
 		for (u64 i = 1; i < n; i++) {
 			cli_sim(i);
@@ -890,7 +950,7 @@ void mainCRTStartup(void)
 
 		unlikely_if (argc < 2 && argc > 3) {
 			eprintf("command `%s` expected %s operands, found %u.\n", "step", "1 or 2", argc - 1);
-			exit(4);
+			exit(EXIT_CMD_INVOP);
 		}
 
 		Matx8 state = Matx8_tryparse(argv, "step", 1);
@@ -948,7 +1008,7 @@ void mainCRTStartup(void)
 
 		unlikely_if (argc < 2 && argc > 3) {
 			eprintf("command `%s` expected %s operands, found %u.\n", "bwsr", "1 or 2", argc - 1);
-			exit(4);
+			exit(EXIT_CMD_INVOP);
 		}
 
 		Matx8 state = Matx8_tryparse(argv, "bwsr", 1);
@@ -984,7 +1044,7 @@ void mainCRTStartup(void)
 
 		unlikely_if (argc > 2) {
 			eprintf("command `%s` expected %s operands, found %u.\n", "bwrn", "0 or 1", argc - 1);
-			exit(4);
+			exit(EXIT_CMD_INVOP);
 		}
 
 		if (!cfg.quiet)
@@ -1021,7 +1081,7 @@ void mainCRTStartup(void)
 
 		unlikely_if (argc != 3 && argc != 5) {
 			eprintf("command `%s` expected %s operands, found %u.\n", "tfm", "2 or 4", argc - 1);
-			exit(4);
+			exit(EXIT_CMD_INVOP);
 		}
 
 		Matx8 state = Matx8_tryparse(argv, "tfm", 1);
@@ -1069,7 +1129,7 @@ void mainCRTStartup(void)
 
 		if (argc != 3) {
 			eprintf("command `%s` expected %s operands, found %u.\n", "merg", "2", argc - 1);
-			exit(4);
+			exit(EXIT_CMD_INVOP);
 		}
 
 		// I don't want a DLL import for strnlen just for this.
@@ -1095,14 +1155,14 @@ void mainCRTStartup(void)
 		if (fd == ~0u) {
 			i32 error; _get_errno(&error);
 			eprintf("can't %s %s: errno=%u.\n", "read", DATAFILE, error);
-			exit(3);
+			exit(EXIT_DATAFILE);
 		}
 
 		if (_locking(fd, LK_NBLCK, INT32_MAX) != 0) {
 			// only try once because I don't feel like looping.
 			i32 error; _get_errno(&error);
 			eprintf("can't %s %s: errno=%u.\n", "lock", DATAFILE, error);
-			exit(3);
+			exit(EXIT_DATAFILE);
 		}
 
 		u32 objects = 0;
@@ -1156,7 +1216,7 @@ void mainCRTStartup(void)
 		if (len == -1) {
 			i32 error; _get_errno(&error);
 			eprintf("can't %s %s: errno=%u.\n", "read", DATAFILE, error);
-			exit(3);
+			exit(EXIT_DATAFILE);
 		}
 
 		likely_if (!cfg.silent)
@@ -1174,8 +1234,8 @@ void mainCRTStartup(void)
 	#else
 		eprintf("unknown command `%s`.\n", *argv);
 	#endif
-		exit(6);
+		exit(EXIT_CMD_UNKWN);
 	}
 
-	exit(0);
+	exit(EXIT_SUCCESS);
 }

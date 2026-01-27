@@ -14,8 +14,6 @@ from json import load as json_load, dumps as json_dumps
 from math import sqrt, erf, log as ln
 
 def norm_ppf(p: float) -> float:
-	# idk how this works, but it does it good enough.
-
 	# Acklam approximation
 	a = [-3.969683028665376e+01,  2.209460984245205e+02,
 		 -2.759285104469687e+02,  1.383577518672690e+02,
@@ -114,15 +112,17 @@ def summarize(
 	if not isinstance(dataset, dict):
 		raise TypeError("dataset must be a dictionary")
 
-	hcollide   = dataset["hcollide"]
-	counts     = dataset["counts"]
-	periods    = dataset["periods"]
-	transients = dataset["transients"]
-	trials     = dataset["trials"]
+	hcollide     = dataset["hcollide"]
+	counts       = dataset["counts"]
+	periods      = dataset["periods"]
+	transients   = dataset["transients"]
+	nxt_trials   = dataset["trials"][0] # number of regular trials
+	pdr_trials   = dataset["trials"][1] # number of predecessor count trials.
+	indegrees = dataset["indegrees"]
 
 	print("Summary:")
 
-	print(f"# total trials: {trials:,}")
+	print(f"# total trials: nxt={nxt_trials:,}   pdr={pdr_trials:,}")
 
 	print(
 		f"# hcollide: " + \
@@ -132,23 +132,21 @@ def summarize(
 
 	print("# counts:")
 	for k, v in counts.items():
-		print(f"    {k}: {v:,} ({v/trials*100}%)")
+		print(f"    {k}: {v:,} ({v/nxt_trials*100}%)")
 
 	if alpha != 0.05:
-		# the float identical check intended. if it is close, then that is not the same.
-		# if you pass something other than a 95% confidence interval, then also run it for 95%
 		z_tmp: float = 1.959963984540054 # norm.ppf(0.975)
 
 		print(f"# 95% confidence intervals (alpha=0.05, z=1.96):")
 		for k, v in counts.items():
-			p = v / trials
+			p = v / nxt_trials
 
-			se = sqrt(p * (1 - p) / trials)
+			se = sqrt(p * (1 - p) / nxt_trials)
 			p_min, p_max = p - z_tmp * se, p + z_tmp * se
 
 			print(f"    {k}: ({p_min*100}%, {p_max*100}%), SE={se}")
 		else:
-			assert p == counts["cycle"] / trials, "`cycle` didn't run last"
+			assert p == counts["cycle"] / nxt_trials, "`cycle` didn't run last"
 			p_min += 1 - 2*p
 			p_max += 1 - 2*p
 
@@ -156,14 +154,14 @@ def summarize(
 
 	print(f"# {round((1 - alpha)*100, 2)}% confidence intervals (alpha={alpha}, z={z}):")
 	for k, v in counts.items():
-		p = v / trials
+		p = v / nxt_trials
 
-		se = sqrt(p * (1 - p) / trials)
+		se = sqrt(p * (1 - p) / nxt_trials)
 		p_min, p_max = p - z_tmp * se, p + z_tmp * se
 
 		print(f"    {k}: ({p_min*100}%, {p_max*100}%), SE={se}")
 	else:
-		assert p == counts["cycle"] / trials, "`cycle` didn't run last"
+		assert p == counts["cycle"] / nxt_trials, "`cycle` didn't run last"
 		# these values are only right if "cycle" was the last item in "counts".
 		# because p here is 1 - p there.
 		p_min += 1 - 2*p
@@ -173,20 +171,28 @@ def summarize(
 
 	print("# periods:")
 	for k, v in sorted(periods.items()):
-		p = v / trials
+		p = v / nxt_trials
 
 		print(f"    {k}: {v:,} ({p*100}%)" +
 			(" **" if p < super_rare else " *" if p < rare else ""))
 
 	print("# transients:")
 	for k, v in sorted(binned_hist(transients, bin_width).items()):
-		p = v / trials
+		p = v / nxt_trials
 		bin_max = k + bin_width - 1
 
 		print(f"    {k}-{bin_max}: {v:,} ({p*100}%)" +
 			(" **" if p < super_rare else " *" if p < rare else ""))
 
-	def _rank_modes(modes_dict: dict) -> None:
+	print("# indegrees:")
+	for k, v in sorted(binned_hist(indegrees, bin_width).items()):
+		p = v / pdr_trials
+		bin_max = k + bin_width - 1
+
+		print(f"    {k}-{bin_max}: {v:,} ({p*100}%)" +
+			(" **" if p < super_rare else " *" if p < rare else ""))
+
+	def _rank_modes(modes_dict: dict, trials: int) -> None:
 		# sort by values
 		modes = sorted(modes_dict.items(), key=lambda x: x[1])
 
@@ -196,51 +202,65 @@ def summarize(
 
 	if mode_length > 0:
 		print("# period modes:")
-		_rank_modes(periods)
+		_rank_modes(periods, nxt_trials)
 
 		print("# transient modes:")
-		_rank_modes(transients)
+		_rank_modes(transients, nxt_trials)
 
-	E = lambda D: sum(val * cnt for val, cnt in D.items()) / trials
-	V = lambda D: sum(val**2 * cnt for val, cnt in D.items()) / trials - E(D)**2
+		print("# indegree modes:")
+		_rank_modes(indegrees, pdr_trials)
+
+	E = lambda D, T: sum(val * cnt for val, cnt in D.items()) / T
+	V = lambda D, T: sum(val**2 * cnt for val, cnt in D.items()) / T - E(D,T)**2
 
 	print(
 		f"# E[x]:",
-		f"    periods   : {E(periods)}",
-		f"    transients: {E(transients)}",
+		f"    periods   : {E(periods, nxt_trials)}",
+		f"    transients: {E(transients, nxt_trials)}",
+		f"    indegrees : {E(indegrees, pdr_trials)}",
 		sep = '\n'
 	)
 	print(
 		f"# V[x]:",
-		f"    periods   : {V(periods)}",
-		f"    transients: {V(transients)}",
+		f"    periods   : {V(periods, nxt_trials)}",
+		f"    transients: {V(transients, nxt_trials)}",
+		f"    indegrees : {V(indegrees, pdr_trials)}",
 		sep = '\n'
 	)
 	print(
 		f"# stddev(x):",
-		f"    periods   : {sqrt(V(periods))}",
-		f"    transients: {sqrt(V(transients))}",
+		f"    periods   : {sqrt(V(periods, nxt_trials))}",
+		f"    transients: {sqrt(V(transients, nxt_trials))}",
+		f"    indegrees : {sqrt(V(indegrees, pdr_trials))}",
 		sep = '\n'
 	)
 
-	print(f"# max transient: {max(transients.keys())}")
+	print(
+		f"# max:",
+		f"    periods   : {max(periods.keys())}",
+		f"    transients: {max(transients.keys())}",
+		f"    indegrees : {max(indegrees.keys())}",
+		sep = '\n'
+	)
+
+	# TODO: print more stuff about the indegree count statistics
 
 def combine_datasets(*datasets) -> dict:
 	if len(datasets) == 0:
 		return {
 			"hcollide": {"count": 0, "states": [0]},
-			"trials": 0,
+			"trials": [0, 0],
 			"counts": defaultdict(int, {"empty": 0, "const": 0, "cycle": 0}),
 			"periods": defaultdict(int),
 			"transients": defaultdict(int),
 		}
 
 	hcollide   = {"count": 0, "states": {0}}
-	trials     = 0
+	trials     = [0, 0]
 	counts     = defaultdict(int)
-	# always use new dictionaries in case the other ones are not `defaultdict`.
 	periods    = defaultdict(int)
 	transients = defaultdict(int)
+	indegrees  = defaultdict(int)
 
 	for dataset in datasets:
 		if dataset["hcollide"]["count"] > hcollide["count"]:
@@ -249,7 +269,8 @@ def combine_datasets(*datasets) -> dict:
 		elif dataset["hcollide"]["count"] == hcollide["count"]:
 			hcollide["states"].update(dataset["hcollide"]["states"])
 
-		trials += dataset["trials"]
+		trials[0] += dataset["trials"][0]
+		trials[1] += dataset["trials"][1]
 		counts["empty"] += dataset["counts"]["empty"]
 		counts["const"] += dataset["counts"]["const"]
 		counts["cycle"] += dataset["counts"]["cycle"]
@@ -259,6 +280,9 @@ def combine_datasets(*datasets) -> dict:
 
 		for key, val in dataset["transients"].items():
 			transients[key] += val
+
+		for key, val in dataset["indegrees"].items():
+			indegrees[key] += val
 
 	hcollide["states"] = list(hcollide["states"])
 
@@ -271,40 +295,9 @@ def combine_datasets(*datasets) -> dict:
 		"trials"    : trials,
 		"counts"    : counts,
 		"periods"   : periods,
-		"transients": transients
+		"transients": transients,
+		"indegrees" : indegrees,
 	}
-
-"""
-def repr_dataset(dataset: dict, i: int | None = None, object_only: bool = False, copy: bool = False) -> str:
-	hcollide   = dataset["hcollide"]
-	trials     = dataset["trials"]
-	counts     = dataset["counts"]
-	periods    = dataset["periods"]
-	transients = dataset["transients"]
-
-	if object_only:
-		i = None
-
-	d = f"dataset{'' if i is None else '_' + str(i)} = {{" + \
-		f"\n\t\"hcollide\": {{\"count\": {hcollide["count"]}, \"states\": [" + \
-			f"{ ', '.join(f"0x{x:016x}" for x in hcollide["states"]) }]}}," + \
-		f"\n\t\"trials\": {trials:_}," + \
-		f"\n\t\"counts\": {{\"empty\": {counts["empty"]:_}, \"const\": {counts["const"]:_}, \"cycle\": {counts["cycle"]:_}}}," + \
-		f"\n\t\"periods\": {str(periods).replace("<class 'int'>", "int")}," + \
-		f"\n\t\"transients\": {str(transients).replace("<class 'int'>", "int")}" + \
-		f"\n}}"
-
-	if object_only:
-		d = d[10:]
-
-	if copy:
-		import subprocess
-		return subprocess.run(["clip"], input=d, text=True)
-	else:
-		return d
-"""
-
-# functions specific to the new API:
 
 def dataset_from_json(path: str = "data.json") -> tuple[dict, int]:
 	with open(path) as f:
@@ -312,28 +305,30 @@ def dataset_from_json(path: str = "data.json") -> tuple[dict, int]:
 
 	for x in data:
 		x["hcollide"]["states"] = [int(s, 16) for s in x["hcollide"]["states"]]
-		x["trials"] = int(x["trials"].replace(",", ""))
-		x["counts"] = {k: int(v.replace(",", "")) for k, v in x["counts"].items()}
-		x["periods"] = defaultdict(int, {int(k): v for k, v in x["periods"].items()})
+		x["trials"]     = [int(e.replace(",", "")) for e in x["trials"]]
+		x["counts"]     = {k: int(v.replace(",", "")) for k, v in x["counts"].items()}
+		x["periods"]    = defaultdict(int, {int(k): v for k, v in x["periods"].items()})
 		x["transients"] = defaultdict(int, {int(k): v for k, v in x["transients"].items()})
+		x["indegrees"]  = defaultdict(int, {int(k): v for k, v in x["indegrees"].items()})
 
 	return combine_datasets(*data), len(data)
 
 def json_from_dataset(dataset: dict) -> None:
 	hcollide = dataset["hcollide"].copy()
 	hcollide["states"] = [f"0x{s:016x}" for s in hcollide["states"]]
-	trials = f"{dataset["trials"]:,}"
+	trials = dataset["trials"]
 	counts = {k: f"{v:,}" for k, v in dataset["counts"].items()}
 	# the keys of the periods and transients attributes get turned to strings by json.dumps
 
-	return "[" + \
-		f"\n{{" + \
-		f"\n\t\"hcollide\": {json_dumps(hcollide)}," + \
-		f"\n\t\"trials\": \"{trials}\"," + \
-		f"\n\t\"counts\": {json_dumps(counts)}," + \
-		f"\n\t\"periods\": {json_dumps(dataset["periods"])}," + \
-		f"\n\t\"transients\": {json_dumps(dataset["transients"])}" + \
-		f"\n}}" + \
+	return "["                                                      + \
+		f"\n{{"                                                     + \
+		f"\n\t\"hcollide\": {json_dumps(hcollide)},"                + \
+		f"\n\t\"trials\": [\"{trials[0]:,}\", \"{trials[1]:,}\"],"  + \
+		f"\n\t\"counts\": {json_dumps(counts)},"                    + \
+		f"\n\t\"periods\": {json_dumps(dataset["periods"])},"       + \
+		f"\n\t\"transients\": {json_dumps(dataset["transients"])}," + \
+		f"\n\t\"indegrees\": {json_dumps(dataset["indegrees"])}"    + \
+		f"\n}}"                                                     + \
 		f"\n]\n"
 
 def fold_datafile(path: str | None = None, ret: str = "json") -> tuple[str | dict, int] | None:
@@ -381,8 +376,6 @@ def merge_datafiles(paths: list[str] | None = None, delete_old: bool = False, re
 		if delete_old:
 			raise ValueError("delete_old=True requires more than one path to be given.")
 
-		# NOTE: currently, the return type of this expression is inconsistent with the
-		#       other branches. once this function also returns a length, it won't be.
 		return fold_datafile(paths[0], ret=ret)
 
 	data    = tuple(zip( *(dataset_from_json(path) for path in paths) ))
@@ -406,7 +399,7 @@ def merge_datafiles(paths: list[str] | None = None, delete_old: bool = False, re
 	if ret != "none":
 		return (jdata if ret == "json" else dataset), length
 
-show_new = lambda path=None: summarize(
+show_new = lambda path: summarize(
 	fold_datafile(path, ret="dataset")[0],
 	bin_width=10, z=8, rare=1e-4, super_rare=1e-6
 )
@@ -421,8 +414,6 @@ if __name__ == "__main__":
 	command = argv[1]
 	operand = argv[2] if len(argv) == 3 else None
 
-	# TODO: add a repr_data commmand?
-
 	if command in {"-f", "--fold"}:
 		if len(argv) > 3:
 			print(f"too many command-line arguments given to {command}.")
@@ -430,13 +421,12 @@ if __name__ == "__main__":
 
 		fold_datafile(operand)
 	elif command in {"-s", "--summarize"}:
-		# NOTE: this also collapses the datafile
 		show_new(operand)
 	elif command in {"-m", "--merge"}:
 		merge_datafiles(paths=argv[2:], delete_old=True, ret="none")
 	elif command in {"-h", "-?", "-help", "--help"}:
 		print(
-			f"usage: {argv[0].replace("\\", "/").rsplit("/", 1)[1]} COMMAND [OPERANDS]" \
+			f"usage: analyze.py COMMAND [OPERANDS]" \
 			"\noptions:" \
 			"\n    -h, -?, -help, --help    print this message and exit" \
 			"\n    -s, --summarize [PATH]   folds the datafile and prints statistics" \

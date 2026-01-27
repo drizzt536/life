@@ -8,7 +8,7 @@
 # it works for sure with MinGW devkit 2.5 (GCC 15.2, binutils 2.45)
 # the MSYS2 version of GCC won't work because it is UCRT and not MSVCRT.
 
-VERSION := 2.1.1
+VERSION := 2.2.0
 
 CFLAGS     := -Werror -Wall -Wextra -Wno-parentheses -Wno-missing-profile -std=gnu23 \
 			-Iinclude -masm=intel -DPY_BASE=\"analyze\" -DVERSION=\"$(VERSION)\"
@@ -25,8 +25,7 @@ LDFLAGS    := -s -O --as-needed --gc-sections --relax --exclude-all-symbols \
 LDLIBS     := -lcryptbase -lkernel32 -lshell32 -lucrtbase -luser32
 CFILES     := life.c $(wildcard ./include/*.h)
 
-CFLAGS_LIFE_O = -c -fprofile-use -nostdlib -ffreestanding $(CFLAGS) \
-	-DPY_VERSION="\"$$(python --version | tail -c +8)\"" $(COPTZ) $(CPROF_OPTZ)
+CFLAGS_LIFE_O = -c -fprofile-use -nostdlib -ffreestanding $(CFLAGS) $(COPTZ) $(CPROF_OPTZ)
 
 TRUTH_TABLE_CMD := $$(python ./gen-ruleset.py -tt2 '$(RULESET)' | awk 'BEGIN {ORS = " "} NR==1 {print "-DB_TT=" $$0 "u"} NR==2 {print "-DS_TT=" $$0 "u"; exit}')
 
@@ -244,31 +243,31 @@ ifeq ($(PROFILE),false)
 life.o: $(CFILES) req-gcc ruleset.tmp
 	@# can't use `-ffreestanding` for some reason
 	truth_table=$(TRUTH_TABLE_CMD); \
-	gcc -c -nostdlib $(CFLAGS) $$truth_table -DPY_VERSION="\"$$(python --version | tail -c +8)\"" $(COPTZ) $< -o $@
+	gcc -c -nostdlib $(CFLAGS) $$truth_table $(COPTZ) $< -o $@
 else
 prof.exe: init-crt.o $(CFILES) ruleset.tmp req-gcc
 	truth_table=$(TRUTH_TABLE_CMD); \
-	gcc -fprofile-generate -DPROFILING=1 $(CFLAGS) $$truth_table $(COPTZ) $< life.c -o $@
+	gcc -fprofile-generate -DPROFILING=true $(CFLAGS) $$truth_table $(COPTZ) $< life.c -o $@
 
 life.gcda: prof.exe req-linux
 ifeq ($(QUIET),true)
 	./$< -H nrun 2500000 &> /dev/null
 	./$< -d . step 0xb9078411668e300d 18446744073709551495 &> /dev/null
 	./$< step 0xb112a93586a4b278 7 &> /dev/null
-ifeq ($(BWSEARCH),true)
-	./$< -H bwsr 0x5e315607a2200650 2 &> /dev/null
+ifneq ($(BWSEARCH),false)
+	./$< -H bus 0x5e315607a2200650 2 &> /dev/null
 	./$< -q bwsr 0xffffffffffffffff 1 &> /dev/null
-	./$< bwrn 24 &> /dev/null
+	./$< burn 24 &> /dev/null
 endif # BWSEARCH
 	./$< -v &> /dev/null
 else # QUIET == false branch
 	./$< -H nrun 2500000
 	./$< -d . step 0xb9078411668e300d 18446744073709551495
 	./$< step 0xb112a93586a4b278 7 &> /dev/null
-ifeq ($(BWSEARCH),true)
-	./$< -H bwsr 0x5e315607a2200650 2
-	./$< -q bwsr 0xffffffffffffffff 1
-	./$< bwrn 24
+ifneq ($(BWSEARCH),false)
+	./$< -H bus 0x5e315607a2200650 2
+	./$< -q bus 0xffffffffffffffff 1
+	./$< burn 24
 endif # BWSEARCH
 	./$< -v
 endif # QUIET
@@ -293,11 +292,6 @@ endif # optimize
 	objcopy $@.tmp --remove-section .pdata --remove-section .xdata $@
 	strip -S $@
 endif # profile
-
-analyze.py: analysis.py req-linux req-python
-	python -O -m compileall -b $< > /dev/null
-	mv $<c $@
-	@echo "# built $@ for $$(python --version)"
 
 ifeq ($(SHELL32),false)
 life.exe: life.o req-binutils req-vcbtools
@@ -344,4 +338,4 @@ clean: req-linux
 	rm -f *.o *.tmp *.gcda prof.exe
 
 distclean: req-linux
-	rm -f *.o *.tmp *.gcda *.exe *.7z life.txt life-launch.txt analyze.py
+	rm -f *.o *.tmp *.gcda *.exe *.7z life.txt life-launch.txt

@@ -63,7 +63,7 @@ static void log_if_interesting(Matx8 s0, Matx8 s1, sttyp_t type, u32 step, u32 p
 	// the zero initialization is required so the program doesn't crash in profiling mode.
 	struct _timespec64 ts = {0};
 
-#ifdef PROFILING
+#if PROFILING
 	// profiling is forced into using MSVCRT, which doesn't have `timespec_get`,
 	// so I have to just get rid of that part.
 	// the same length as the call, just so profiling will still work.
@@ -101,7 +101,7 @@ static void log_if_interesting(Matx8 s0, Matx8 s1, sttyp_t type, u32 step, u32 p
 		s0.matx, interest
 	);
 
-	// pick the alignment based on the length of the max value, up to 5 digits.
+	// pick the alignment based on the length of the max value, up to 6 digits.
 	unlikely_if (interest & (2 | 16))
 		#if INT_LEN(PERIOD_LEN) == 1
 			printf( "%u | ", period);

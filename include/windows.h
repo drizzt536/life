@@ -23,13 +23,13 @@ typedef unsigned __int128 u128;
 
 // CRYPTBASE.dll (or Advapi32.dll)
 bool SystemFunction036(void *buffer, u32 length);
-#define RtlGenRandom		SystemFunction036
+#define RtlGenRandom SystemFunction036
 
 // USER32.dll
 u32 GetAsyncKeyState(u32 vkey);
 bool OpenClipboard(void *owner);
-bool EmptyClipboard();
-bool CloseClipboard();
+bool EmptyClipboard(void);
+bool CloseClipboard(void);
 void *SetClipboardData(u32 format, void *hMem);
 
 // KERNEL32.dll

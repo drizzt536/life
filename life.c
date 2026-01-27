@@ -7,11 +7,6 @@
 // TODO: put the ruleset somewhere in the data.json file.
 //       in the python file, only collapse objects with the same ruleset
 //       or maybe include the ruleset in the filename?
-// TODO: put predecessor data into the JSON object as well.
-//       "predecessors": {"key": value, ...}
-//       maybe change "trials" to "etrials" & "pdtrials", or maybe do
-//       "trials": [<etrials>, <pdtrials>]
-//       probably do this before implementing the ruleset.
 // TODO: consider making a second version of life-launch for predecessor trial testing.
 // TODO: consider letting the user pass more than one input state to `bwsr`
 // TODO: make TIMER=true the default instead of TIMER=false
@@ -122,6 +117,10 @@
 	#define SHELL32 true
 #endif
 
+#ifndef PROFILING
+	#define PROFILING false
+#endif
+
 ////////////////////////////////// config end /////////////////////////////////
 
 #ifdef _MSC_VER
@@ -150,11 +149,9 @@
 #define    PERIOD_MAX (-1 +    PERIOD_LEN)
 #define TRANSIENT_MAX (-1 + TRANSIENT_LEN)
 
-#ifdef PROFILING
+#if PROFILING
 	#define access _access
 #else
-	#define PROFILING 0
-
 	// NOTE: the profiling mode is strange, because it automatically
 	//       links with msvcrt, and if you pass `-nostdlib -ffreestanding`,
 	//       then it just says it can't find any of the functions it needs,
@@ -377,7 +374,7 @@ static const char *const help_string =
 	"\n    merg A B       runs `./" PY_BASE ".py -m A B` and exit"
 	"\n"
 	"\n    N always defaults to 1 if not given."
-	"\n    sim and run default to a random state if no state is given."
+	"\n    S defaults to a random state if optional and not given."
 	"\n    run, nrun, sim, and nsim stop traversing when a repeat state is found."
 	"\n    'inf' can be given to nrun"
 #if BWSEARCH
@@ -395,9 +392,6 @@ static const char *const help_string =
 		"VON_NEUMANN"
 	#elif NEIGHBORHOOD == NH_DIAGONAL
 		"DIAGONAL"
-	#endif
-	#ifdef PY_VERSION
-	"\n    PY_VERSION=\""	PY_VERSION "\""
 	#endif
 	#ifdef ISA // the profiling version doesn't always have this
 	"\n    ISA=\""			ISA "\""
@@ -476,14 +470,15 @@ static void show_cursor(void) { likely_if (!cfg.silent) printf("\e[?25h"); }
 static void bell(void) { likely_if (!cfg.silent) putchar('\x07'); }
 
 #include "du64.h"
-#include "summary.h"
-#include "sim.h"
-#include "run.h"
 
 #if BWSEARCH
 	#include "bw-search.h"
 	#include "bw-run.h"
 #endif
+
+#include "summary.h"
+#include "sim.h"
+#include "run.h"
 
 #if DEBUG
 static void log_collisions(void) {
@@ -831,6 +826,9 @@ void mainCRTStartup(void)
 
 	u64 n; // more than one branch use a generic u64 variable
 
+	if (argc == 0)
+		__builtin_unreachable();
+
 	// parse the first argument as a 32-bit unsigned integer.
 	// these branches aren't worth putting in helper functions because they are tiny.
 	// NOTE: this is safe because the string is at least 3 characters long,
@@ -839,19 +837,16 @@ void mainCRTStartup(void)
 	case CHARS4_TO_U32('n', 'r', 'u', 'n'):
 		print_table_headers();
 
-		if (argc == 0)
-			__builtin_unreachable();
-
 		likely_if (argc == 2) {
 			likely_if (streq(argv[1], "inf")) {
 				run_forever();
 				give_summary(false);
 				__builtin_unreachable();
 			}
-			else
-				n = Matx8_tryparse(argv, "run", 1).matx;
+
+			n = Matx8_tryparse(argv, "run", 1).matx;
 		}
-		else if (argc == 1)
+		else likely_if (argc == 1)
 			n = 1;
 		else {
 			eprintf("command `%s` expected %s operands, found %u.\n", "nrun", "0 or 1", argc - 1);
@@ -868,9 +863,6 @@ void mainCRTStartup(void)
 		__builtin_unreachable();
 	case CHARS4_TO_U32('r', 'u', 'n',  0 ):
 		print_table_headers();
-
-		if (argc == 0)
-			__builtin_unreachable();
 
 		if (argc == 1)
 			run_once();
@@ -890,9 +882,6 @@ void mainCRTStartup(void)
 		give_summary(false);
 		__builtin_unreachable();
 	case CHARS4_TO_U32('s', 'i', 'm',  0 ):
-		if (argc < 1)
-			__builtin_unreachable();
-
 		unlikely_if (argc == 1) {
 			cli_sim(1);
 		#if DEBUG
@@ -917,9 +906,6 @@ void mainCRTStartup(void)
 		#endif
 		break;
 	case CHARS4_TO_U32('s', 'i', 'm', '1'):
-		if (argc == 0)
-			__builtin_unreachable();
-
 		if (argc == 1) {
 			cli_sim_one();
 			exit(EXIT_SUCCESS);
@@ -934,9 +920,6 @@ void mainCRTStartup(void)
 		cli_sim_one(Matx8_tryparse(argv, "sim1", 1));
 		break;
 	case CHARS4_TO_U32('n', 's', 'i', 'm'):
-		if (argc == 0)
-			__builtin_unreachable();
-
 		likely_if (argc == 2) {
 			likely_if (streq(argv[1], "inf")) {
 				u64 trial = 0;
@@ -977,9 +960,6 @@ void mainCRTStartup(void)
 		#endif
 		break;
 	case CHARS4_TO_U32('s', 't', 'e', 'p'): {
-		if (argc == 0)
-			__builtin_unreachable();
-
 		unlikely_if (argc < 2 && argc > 3) {
 			eprintf("command `%s` expected %s operands, found %u.\n", "step", "1 or 2", argc - 1);
 			exit(EXIT_CMD_INVOP);
@@ -1034,12 +1014,9 @@ void mainCRTStartup(void)
 		break;
 	}
 #if BWSEARCH
-	case CHARS4_TO_U32('b', 'u', 's',  0 ):
+	case CHARS4_TO_U32('b', 'u', 's',  0 ): FALLTHROUGH;
 	case CHARS4_TO_U32('b', 'w', 's', 'r'): {
 		// backwards search
-		if (argc == 0)
-			__builtin_unreachable();
-
 		unlikely_if (argc < 2 && argc > 3) {
 			eprintf("command `%s` expected %s operands, found %u.\n", "bwsr", "1 or 2", argc - 1);
 			exit(EXIT_CMD_INVOP);
@@ -1069,13 +1046,10 @@ void mainCRTStartup(void)
 
 		break;
 	}
-	case CHARS4_TO_U32('b', 'u', 'r', 'n'):
+	case CHARS4_TO_U32('b', 'u', 'r', 'n'): FALLTHROUGH;
 	case CHARS4_TO_U32('b', 'w', 'r', 'n'):
 		// backwards run
 		init_bws_hist2();
-
-		if (argc == 0)
-			__builtin_unreachable();
 
 		unlikely_if (argc > 2) {
 			eprintf("command `%s` expected %s operands, found %u.\n", "bwrn", "0 or 1", argc - 1);
@@ -1083,7 +1057,12 @@ void mainCRTStartup(void)
 		}
 
 		if (!cfg.quiet)
-			printf("s=state, c=pd-cnt instance number, n=pd-cnt, T=trial");
+			// don't worry about overflowing the table.
+			// very few states have more than 10^17 predecessors.
+			printf(
+				"timestamp        | start state        | predecessor count | trial\n"
+				"------------------------------------------------------------------"
+			);
 
 		if (argc == 1)
 			bws_run(1);
@@ -1092,29 +1071,10 @@ void mainCRTStartup(void)
 		else
 			bws_run(Matx8_tryparse(argv, "bwrn", 1).matx);
 
-		if (cfg.silent)
-			break;
-
-		if (!cfg.quiet)
-			putchar('\n');
-
-		printf("Summary:\ntotal trial count: ");
-		print_du64(data.trial);
-		putchar('\n');
-		for (u64 i = 0; i < COMBINED_HIST_SIZE; i++)
-			if (data.combined[i] != 0)
-				printf("    %llu: %llu\n", i, data.combined[i]);
-
-		n = bws_hist2->size;
-		for (u64 i = 0; i < n; i++)
-			printf("    %llu: %llu\n", bws_hist2->list[i].key, bws_hist2->list[i].cnt);
-
-		break;
+		give_summary(/*returns*/ false, /*backwards*/ true);
+		__builtin_unreachable();
 #endif
 	case CHARS4_TO_U32('t', 'f', 'm',  0 ): {
-		if (argc == 0)
-			__builtin_unreachable();
-
 		unlikely_if (argc != 3 && argc != 5) {
 			eprintf("command `%s` expected %s operands, found %u.\n", "tfm", "2 or 4", argc - 1);
 			exit(EXIT_CMD_INVOP);
@@ -1160,10 +1120,7 @@ void mainCRTStartup(void)
 		exit(system(PY_BASE " -f " DATAFILE));
 		__builtin_unreachable();
 	case CHARS4_TO_U32('m', 'e', 'r', 'g'): {
-		if (argc == 0)
-			__builtin_unreachable();
-
-		if (argc != 3) {
+		unlikely_if (argc != 3) {
 			eprintf("command `%s` expected %s operands, found %u.\n", "merg", "2", argc - 1);
 			exit(EXIT_CMD_INVOP);
 		}
@@ -1188,7 +1145,7 @@ void mainCRTStartup(void)
 	}
 	case CHARS4_TO_U32('c', 'n', 't',  0 ): {
 		const u32 fd = _open(DATAFILE, O_RDONLY | O_BINARY);
-		if (fd == ~0u) {
+		unlikely_if (fd == ~0u) {
 			i32 error; _get_errno(&error);
 			eprintf("can't %s %s: errno=%u.\n", "read", DATAFILE, error);
 			exit(EXIT_DATAFILE);

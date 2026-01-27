@@ -76,22 +76,22 @@ void comptime_error(void) __attribute__((error("")));
 //////////////////////////////////////////////////////////////////////////////////////////////
 
 static char *sprintf_summary(char *buf) {
-	// assumes the buffer is long enough. it has to be like 8KiB or something.
+	// assumes the input buffer is at least like 8 KiB long
 
 #if DEBUG
 	BUF_WRITE(buf, "{\n\t\"hcollide\": {\"count\": %u, \"states\": [\"0x%016llx\"]},"
-		"\n\t\"trials\": \"",
+		"\n\t\"trials\": [\"",
 		max_collisions, max_collisions_state
 	);
 #else
-	BUF_WRITE(buf, "{\n\t\"hcollide\": {\"count\": 0, \"states\": [\"0x0000000000000000\"]},"
-		"\n\t\"trials\": \"");
+	BUF_WRITE(buf, "{\n\t\"hcollide\": {\"count\": 0, \"states\": [\"0x0000000000000000\"]},\n\t\"trials\": [\"");
 #endif
 	BUF_WRITE(buf, data.counts[EMPTY] + data.counts[CONST] + data.counts[CYCLE]);
 
-	BUF_WRITE(buf, "\",\n\t\"counts\": {\"empty\": \""); BUF_WRITE(buf, data.counts[EMPTY]);
-	BUF_WRITE(buf, "\", \"const\": \"");                 BUF_WRITE(buf, data.counts[CONST]);
-	BUF_WRITE(buf, "\", \"cycle\": \"");                 BUF_WRITE(buf, data.counts[CYCLE]);
+	BUF_WRITE(buf, "\", \"0\"],\n\t\"counts\": {\"empty\": \"");
+	BUF_WRITE(buf, data.counts[EMPTY]);
+	BUF_WRITE(buf, "\", \"const\": \""); BUF_WRITE(buf, data.counts[CONST]);
+	BUF_WRITE(buf, "\", \"cycle\": \""); BUF_WRITE(buf, data.counts[CYCLE]);
 
 	BUF_WRITE(buf, "\"},\n\t\"periods\": {");
 	// this stuff compiles to AVX512 instructions if they are available.
@@ -140,13 +140,81 @@ static char *sprintf_summary(char *buf) {
 		}
 	} // end bare block
 
-	BUF_WRITE(buf, '}', '\n', '}', '\0');
-	return buf - 1; // return a pointer to the null terminator byte.
+	BUF_WRITE(buf, "},\n\t\"indegrees\": {}\n}");
+
+	*buf = '\0';
+
+	return buf; // return a pointer to the null terminator byte.
 }
 
-static void give_summary(const bool returns) {
+#if BWSEARCH
+static char *bws_sprintf_summary(char *buf) {
+	BUF_WRITE(buf,
+		"{"
+		"\n\t\"hcollide\": {\"count\": 0, \"states\": [\"0x0000000000000000\"]},"
+		"\n\t\"trials\": [\"0\", \""
+	);
+
+	BUF_WRITE(buf, data.trial);
+
+	BUF_WRITE(buf,
+		"\"],"
+		"\n\t\"counts\": {\"empty\": \"0\", \"const\": \"0\", \"cycle\": \"0\"},"
+		"\n\t\"periods\": {},"
+		"\n\t\"transients\": {},"
+		"\n\t\"indegrees\": {"
+	);
+
+	u64 max_key = 0;
+
+	if (bws_hist2->size != 0)
+		max_key = bws_hist2->list[bws_hist2->size - 1].key;
+	else
+		// find the last nonzero entry
+		for (u32 i = COMBINED_HIST_SIZE; i --> 0 ;)
+			if (data.combined[i] != 0) {
+				max_key = i;
+				break;
+			}
+
+	for (u64 i = 0; i < COMBINED_HIST_SIZE; i++)
+		if (data.combined[i] != 0) {
+			BUF_WRITE(buf, "\"%llu\": %llu", i, data.combined[i]);
+
+			if (i != max_key)
+				BUF_WRITE(buf, ',', ' ');
+		}
+
+	for (u64 i = 0; i < bws_hist2->size; i++)
+		if (data.combined[i] != 0) {
+			BUF_WRITE(buf, "\"%llu\": %llu", bws_hist2->list[i].key, bws_hist2->list[i].cnt);
+
+			if (i != max_key)
+				BUF_WRITE(buf, ',', ' ');
+		}
+
+	BUF_WRITE(buf, '}', '\n', '}', '\0');
+
+	return buf - 1; // return a pointer to the first null terminator byte.
+}
+
+static void _give_summary(const bool returns, const bool backwards)
+#else
+static void _give_summary(const bool returns)
+#endif
+{
+	// TODO: consider perhaps using malloc/free if the scratch buffer isn't large enough.
+	// basically this is a static assert of this: TABLE_LEN + ARENA_LEN >= 512
+	_Static_assert(SCRATCH_SIZE >= 8*1024,
+		"SCRATCH_SIZE must be at least 8 KiB for `sprintf_sumary` and `bws_sprintf_sumary`"
+	);
+
 	char *const buf_stt = hashtable.scratch;
+#if BWSEARCH
+	char *buf_end = (backwards ? bws_sprintf_summary : sprintf_summary)(buf_stt);
+#else
 	char *buf_end = sprintf_summary(buf_stt);
+#endif
 
 	likely_if (!cfg.silent) {
 		if (cfg.quiet)
@@ -219,6 +287,7 @@ static void give_summary(const bool returns) {
 		} until (OpenClipboard(NULL));
 
 		// now for sure the window and the process has sole access to the clipboard
+		EmptyClipboard();
 		SetClipboardData(CF_TEXT, windows_fuckass_bullshit_global_memory_handle_nonsense);
 
 		// The OS does these anyway, so skip them and reduce the DLL requirements.
@@ -286,3 +355,10 @@ static void give_summary(const bool returns) {
 	if (!returns)
 		exit(EXIT_SUCCESS);
 }
+
+#if BWSEARCH
+#define give_summary(returns, backwards...) \
+	VA_IF(_give_summary(returns, backwards), _give_summary(returns, false), backwards)
+#else
+#define give_summary(returns, backwards...) _give_summary(returns)
+#endif

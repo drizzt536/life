@@ -93,10 +93,35 @@ static void _bws_run_once2(const bool quiet, const Matx8 state) {
 
 	// print interesting states
 	// state, number of predecessors, instance count
-	if (c <= 5) {
-		printf("\ns=0x%016llx  c=%llu  n=%3llu  T=", state.matx, c, key);
-		print_du64(data.trial);
-	}
+	if (c > 5)
+		return;
+
+	// the zero initialization is required so the program doesn't crash in profiling mode.
+	struct _timespec64 ts = {0};
+
+#if PROFILING
+	asm volatile (              // 13 byte NOP
+		".fill 12, 1, 0x66\n\t" // o16 prefix, with 11 more redundant copies.
+		".byte 0x90\n\t"        // one byte nop
+	);
+#else
+	_timespec64_get(&ts, TIME_UTC);
+#endif
+
+	struct tm *tm = _localtime64(&ts.tv_sec);
+
+	// timestamp is the same format as for the run commands
+
+	printf("\n%03d-%02d:%02d:%02d.%03ld | 0x%016llx | %17llu | ",
+		tm->tm_yday + 1,      // DAY: 001-366
+		tm->tm_hour,          // HH: 00-23
+		tm->tm_min,           // MM
+		tm->tm_sec,           // SS
+		ts.tv_nsec / 1000000, // MS
+		state.matx, key
+	);
+
+	print_du64(data.trial);
 }
 
 static FORCE_INLINE void _bws_run_once1(const bool quiet) {

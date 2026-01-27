@@ -1,4 +1,4 @@
-x86-64 Windows testing program for analysis on end states of Conway's Game of Life on an 8x8 torus.
+x86-64 Windows analysis program for life-like Cellular Automata on an 8x8 torus.
 
 The project build requirements are listed at the top of the makefile
 

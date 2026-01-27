@@ -1,7 +1,6 @@
 #pragma once
 #define _WINDOWS_
 
-#include <stdbool.h>
 #include <stdint.h>
 #include <winuser.rh> // CF_TEXT and VK_* stuff
 

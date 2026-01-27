@@ -1,6 +1,6 @@
 # the following things are required:
 	# basic linux tools: mv, rm, sed, awk, stat, grep, tail, touch
-	# other linux tools: gcc (must be MSVCRT), make
+	# other linux tools: gcc  (>=13, must be MSVCRT), make
 	# binutils: ld, strip, objcopy, objdump
 	# VC build tools: dumpbin, editbin (optional)
 	# misc: 7z, wmic, nasm, python (>=3.12)

@@ -19,7 +19,6 @@ static char *_sprint_du64_3(char *buffer, u64 x, const char sep) {
 	unlikely_if (buffer == NULL)
 		return NULL;
 
-
 	u8 i = DU64_MAXLEN;
 	buffer[i] = '\0';
 

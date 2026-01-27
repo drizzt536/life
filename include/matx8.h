@@ -3,7 +3,7 @@
 
 // defines Matx8 and the Matx8_* API
 
-#include "windows.h" // stdbool.h, integer types
+#include "windows.h" // integer types, Windows API
 
 // NOTE: these trials were before the implementation of the arena. With
 //       the arena, I only tested it for single multiplication hashing,

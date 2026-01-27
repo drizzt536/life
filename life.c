@@ -14,6 +14,7 @@
 // TODO: also use the timer in `bws_run_forever`.
 // TODO: given a list of states A1, A2, ..., AN, determine if there is a ruleset
 //       under which state A1 => A2, A2 => A3, etc.
+// TODO: consider adding a flag to make it so a cell counts as its own NEIGHBORHOOD
 
 ///////////////////////////////// config start ////////////////////////////////
 

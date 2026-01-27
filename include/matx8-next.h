@@ -43,10 +43,10 @@
 
 static Matx8 Matx8_next(const Matx8 this) {
 	register u64 // neighbor counter bits
-		n2 = 0, // counter output bit 2. e.g. (n >> 2) & 1
-		n1 = 0, // counter output bit 1. e.g. (n >> 1) & 1
-		n0 = 0, // counter output bit 0. e.g. (n >> 0) & 1
-		c0;     // carry bit for counter bit 0
+		n2 = 0,  // counter output bit 2. e.g. (n >> 2) & 1
+		n1 = 0,  // counter output bit 1. e.g. (n >> 1) & 1
+		n0 = 0,  // counter output bit 0. e.g. (n >> 0) & 1
+		c0;      // carry bit for counter bit 0
 
 	const u64
 		cl = Matx8_xroll(this.matx, 7), // center left

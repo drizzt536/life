@@ -12,6 +12,8 @@
 // TODO: make TIMER=true the default instead of TIMER=false
 //       consider removing the macro variable and making it always true.
 // TODO: also use the timer in `bws_run_forever`.
+// TODO: given a list of states A1, A2, ..., AN, determine if there is a ruleset
+//       under which state A1 => A2, A2 => A3, etc.
 
 ///////////////////////////////// config start ////////////////////////////////
 

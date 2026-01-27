@@ -170,7 +170,7 @@ static char *bws_sprintf_summary(char *buf) {
 	if (bws_hist2->size != 0)
 		max_key = bws_hist2->list[bws_hist2->size - 1].key;
 	else
-		// find the last nonzero entry
+		// find the last nonzero entry in the primary histogram
 		for (u32 i = COMBINED_HIST_SIZE; i --> 0 ;)
 			if (data.combined[i] != 0) {
 				max_key = i;
@@ -185,13 +185,16 @@ static char *bws_sprintf_summary(char *buf) {
 				BUF_WRITE(buf, ',', ' ');
 		}
 
-	for (u64 i = 0; i < bws_hist2->size; i++)
-		if (data.combined[i] != 0) {
-			BUF_WRITE(buf, "\"%llu\": %llu", bws_hist2->list[i].key, bws_hist2->list[i].cnt);
+	for (u64 i = 0; i < bws_hist2->size; i++) {
+		const u64 key = bws_hist2->list[i].key;
 
-			if (i != max_key)
+		if (data.combined[i] != 0) {
+			BUF_WRITE(buf, "\"%llu\": %llu", key, bws_hist2->list[i].cnt);
+
+			if (key != max_key)
 				BUF_WRITE(buf, ',', ' ');
 		}
+	}
 
 	BUF_WRITE(buf, '}', '\n', '}', '\0');
 

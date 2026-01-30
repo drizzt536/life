@@ -1,4 +1,4 @@
-// compile with `make -B DEBUG=true CLIP=true TIMER=true NEIGHBORHOOD=MOORE RULESET=B3/S23 ISA=avx2`
+// compile with `make -B DEBUG=true CLIP=true SHELL32=false NEIGHBORHOOD=MOORE RULESET=B3/S23 ISA=native`
 
 // I do not care that writing to u.x and then reading from u.y is not defined
 // for unions. C just reinterprets the bits as the other type with no change,
@@ -9,12 +9,10 @@
 //       or maybe include the ruleset in the filename?
 // TODO: consider making a second version of life-launch for predecessor trial testing.
 // TODO: consider letting the user pass more than one input state to `bwsr`
-// TODO: make TIMER=true the default instead of TIMER=false
-//       consider removing the macro variable and making it always true.
-// TODO: also use the timer in `bws_run_forever`.
+// TODO: consider adding a flag to make it so a cell counts as its own neighborhood
 // TODO: given a list of states A1, A2, ..., AN, determine if there is a ruleset
 //       under which state A1 => A2, A2 => A3, etc.
-// TODO: consider adding a flag to make it so a cell counts as its own NEIGHBORHOOD
+// TODO: idk, maybe figure out if GPU acceleration can work somewhere for this?
 
 ///////////////////////////////// config start ////////////////////////////////
 
@@ -22,7 +20,7 @@
 	#define ALIVE_CHAR_DEF	'#' // character to print for alive cells
 #endif
 #ifndef DEAD_CHAR_DEF
-	#define DEAD_CHAR_DEF	' ' // character to print for  dead cells
+	#define DEAD_CHAR_DEF	' ' // character to print for dead cells
 #endif
 
 #ifndef SLEEP_MS_T_DEF
@@ -89,12 +87,6 @@
 	// true  => include the -c flag
 	// false => no -c flag (less DLL imports)
 	#define CLIPBOARD false
-#endif
-
-#ifndef TIMER
-	// true  => include the nrun periodic data file update and program state reset.
-	// false => don't
-	#define TIMER false
 #endif
 
 #ifndef HELP
@@ -179,6 +171,7 @@
 
 #define FALLTHROUGH __attribute__((fallthrough))
 
+#define keypressed(key) (GetAsyncKeyState(key) & 0x8000)
 #define ememcpy(dst, src, len) (__builtin_memcpy(dst, src, len) + len /* point to the end */)
 #define streq(x, y) (__builtin_strcmp(x, y) == 0)
 #define POPCNT(x) __builtin_stdc_count_ones(x)
@@ -272,7 +265,10 @@ typedef enum <% EMPTY, CONST, CYCLE %> sttyp_t; // state type
 
 // static HashTable hashtable = {0};
 #define COMBINED_HIST_SIZE (PERIOD_LEN + TRANSIENT_LEN + 2)
+#define DATA_SIZE ((COMBINED_HIST_SIZE + 1) * sizeof(u64))
 static union {
+	char raw[DATA_SIZE];
+
 	struct {
 		u64 combined[COMBINED_HIST_SIZE];
 		u64 trial;
@@ -333,10 +329,12 @@ static const char *const help_string =
 	"\n    -c   in run modes, copy the summary to the clipboard as well as printing."
 #endif
 	"\n    -f   in run modes, concatenate the summary data together into " DATAFILE "."
+	"\n    -R   use REALTIME process priority class and lock to the given CPU cores."
+	"\n         the argument can either be a hex core mask or a core list like \"1,2,3\"."
 	"\n    -H   use HIGH process priority class."
 	"\n    -q   quiet mode. suppresses most non-error output messages."
 	"\n    -Q   silent mode. suppresses all terminal output including error messages."
-	"\n    -s   specify a key code to stop in `nrun inf` `nsim inf`, and `sim1`."
+	"\n    -s   specify a key code to stop in applicable modes"
 	"\n    -u   specify a key code to update the user in `nrun inf`."
 	"\n    -S   specify a wait in ms between states in sim modes. default=" TOSTRING_EXPANDED(SLEEP_MS_S_DEF) "."
 	"\n    -T   specify a wait in ms between trials in sim modes. default=" TOSTRING_EXPANDED(SLEEP_MS_T_DEF) "."
@@ -409,7 +407,6 @@ static const char *const help_string =
 	"\n    RAND=\"RtlGenRandom, buffer=" TOSTRING_EXPANDED(RAND_BUF_LEN) "\""
 	#endif
 	"\n    ARENA_LEN="		TOSTRING_EXPANDED(ARENA_LEN)
-	"\n    TIMER="			TOSTRING_EXPANDED(TIMER)
 	"\n    CLIPBOARD="		TOSTRING_EXPANDED(CLIPBOARD)
 	"\n    DEBUG="			TOSTRING_EXPANDED(DEBUG)
 	"\n"
@@ -473,15 +470,17 @@ static void show_cursor(void) { likely_if (!cfg.silent) printf("\e[?25h"); }
 static void bell(void) { likely_if (!cfg.silent) putchar('\x07'); }
 
 #include "du64.h"
+#include "summary.h"
+#include "sim.h"
+#include "run.h"
 
 #if BWSEARCH
 	#include "bw-search.h"
 	#include "bw-run.h"
 #endif
 
+#define SUMMARY_IMPL
 #include "summary.h"
-#include "sim.h"
-#include "run.h"
 
 #if DEBUG
 static void log_collisions(void) {
@@ -489,7 +488,7 @@ static void log_collisions(void) {
 		return;
 
 	printf("hash collisions: total="); print_du64(total_collisions, '_');
-	printf(", trial max=%u, s=0x%016llx\n", max_collisions, max_collisions_state);
+	printf(", trial max=%u, s=%#018zx\n", max_collisions, max_collisions_state);
 }
 #endif
 
@@ -654,6 +653,49 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 				POP_ARG();
 				break;
 			}
+			case 'R': {
+				if (operand == NULL)
+					goto flag_no_operand;
+
+				char *arg_end;
+
+				u64 affinity_mask;
+
+				if (operand[0] == '0' && (operand[1] | 32) == 'x')
+					// parse the mask directly, only if the input is hex
+					affinity_mask = strtoull(operand, &arg_end, 0 /*16*/);
+				else {
+					// parse a logical core list, e.g. `-R "2,5,61"`
+					affinity_mask = 0;
+
+					// use a separate pointer in case the affinity mask is invalid later
+					// and it flag_invalid_operand needs the pointer to the start of the string.
+					char *operand_cur = operand;
+					do {
+						const u64 core = strtoull(operand_cur, &arg_end, 0);
+
+						if (core > 63)
+							goto flag_invalid_operand;
+
+						// NOTE: passing something like `-R "2,2,2,2,2,2"` is the same as `-R 2`
+						affinity_mask |= 1llu << core;
+						operand_cur = arg_end + 1;
+					} while (*arg_end == ',');
+
+				}
+
+				if (*arg_end != '\0')
+					goto flag_invalid_operand;
+
+				void *const process = GetCurrentProcess();
+				SetPriorityClass(process, REALTIME_PRIORITY_CLASS);
+
+				if (!SetProcessAffinityMask(process, affinity_mask))
+					goto flag_invalid_operand;
+
+				POP_ARG();
+				break;
+			}
 			case 'H':
 				SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
 				break;
@@ -668,11 +710,11 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 				else likely_if (!cfg.silent)
 					printf("%.*s\n", (i32) __builtin_strlen(VERSION), help_string + 6);
 			#else
-				// store a separate string.
+				// store a separate string from the help text.
 				if (!cfg.quiet)
 					puts("life v" VERSION);
 				else likely_if (!cfg.silent)
-					puts(VERSION);
+					puts("life v" VERSION + 6);
 			#endif
 				exit(EXIT_SUCCESS);
 			default:
@@ -843,7 +885,7 @@ void mainCRTStartup(void)
 		likely_if (argc == 2) {
 			likely_if (streq(argv[1], "inf")) {
 				run_forever();
-				give_summary(false);
+				give_summary(SUM_NO_RETURN);
 				__builtin_unreachable();
 			}
 
@@ -862,7 +904,7 @@ void mainCRTStartup(void)
 		for (u64 i = n >> 3; i --> 0 ;)
 			RUN_8();
 
-		give_summary(false);
+		give_summary(SUM_NO_RETURN);
 		__builtin_unreachable();
 	case CHARS4_TO_U32('r', 'u', 'n',  0 ):
 		print_table_headers();
@@ -882,7 +924,7 @@ void mainCRTStartup(void)
 				}
 			}
 
-		give_summary(false);
+		give_summary(SUM_NO_RETURN);
 		__builtin_unreachable();
 	case CHARS4_TO_U32('s', 'i', 'm',  0 ):
 		unlikely_if (argc == 1) {
@@ -1007,7 +1049,7 @@ void mainCRTStartup(void)
 			state = Matx8_next(state);
 
 		likely_if (!cfg.silent)
-			printf("0x%016llx\n", state.matx);
+			printf("%#018zx\n", state.matx);
 
 		if (!cfg.quiet) {
 			print_state(state);
@@ -1038,14 +1080,14 @@ void mainCRTStartup(void)
 
 		for (; n > 0 && pdlist->size > 0; n--) {
 			if (!cfg.quiet)
-				printf("%llu step%s remaining\n", n, "s" + (n == 1));
+				printf("%zu step%s remaining\n", n, "s" + (n == 1));
 
 			pdlist = find_predecessors(pdlist);
 		}
 
 		likely_if (!cfg.silent)
 			for (u64 i = 0; i < pdlist->size; i++)
-				printf("0x%016llx\n", pdlist->states[i].matx);
+				printf("%#018zx\n", pdlist->states[i].matx);
 
 		break;
 	}
@@ -1074,7 +1116,7 @@ void mainCRTStartup(void)
 		else
 			bws_run(Matx8_tryparse(argv, "bwrn", 1).matx);
 
-		give_summary(/*returns*/ false, /*backwards*/ true);
+		give_summary(SUM_NO_RETURN, SUM_BACKWARDS);
 		__builtin_unreachable();
 #endif
 	case CHARS4_TO_U32('t', 'f', 'm',  0 ): {
@@ -1108,7 +1150,7 @@ void mainCRTStartup(void)
 		state = Matx8_yroll(state, roll.y);
 
 		likely_if (!cfg.silent)
-			printf("0x%016llx\n", state.matx);
+			printf("%#018zx\n", state.matx);
 
 		if (!cfg.quiet) {
 			print_state(state);

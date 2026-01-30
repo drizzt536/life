@@ -41,10 +41,12 @@ void *CreateMutexA(void *attrs, bool owner, char *name);
 u32 WaitForSingleObject(void *handle, u32 ms);
 void *GetCurrentProcess(void);
 bool SetPriorityClass(void *process, u32 priorityClass);
+bool SetProcessAffinityMask(void *process, u64 processAffinityMask);
 
-#define GMEM_MOVEABLE 0x0002
-#define ERROR_ALREADY_EXISTS 183
-#define HIGH_PRIORITY_CLASS 0x80
+#define ERROR_ALREADY_EXISTS    183
+#define GMEM_MOVEABLE           0x02
+#define HIGH_PRIORITY_CLASS     0x80
+#define REALTIME_PRIORITY_CLASS 0x100
 
 // define the real names for the stupid functions
 #define WaitForMutexUnlock WaitForSingleObject

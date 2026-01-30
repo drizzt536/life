@@ -1,5 +1,10 @@
-#pragma once
+#ifndef SUMMARY_H
 #define SUMMARY_H
+
+#define SUM_RETURN		true
+#define SUM_NO_RETURN	false
+#define SUM_BACKWARDS	true
+#define SUM_FORWARDS	false
 
 static FORCE_INLINE u32 count_args(...) { return __builtin_va_arg_pack_len(); }
 
@@ -73,13 +78,30 @@ void comptime_error(void) __attribute__((error("")));
 #define BUF_WRITE(buf, x1, x2plus...) \
 	VA_IF(_BUF_WRITE2plus(buf, x1, x2plus), _BUF_WRITE1(buf, x1), x2plus)
 
-//////////////////////////////////////////////////////////////////////////////////////////////
+#if BWSEARCH
+#define give_summary(returns, direction...) \
+	VA_IF(_give_summary(returns, direction), _give_summary(returns, SUM_FORWARDS), direction)
+#else
+#define give_summary(returns, direction...) _give_summary(returns)
+#endif
 
+static char *sprintf_summary(char *buf);
+#if BWSEARCH
+static char *bws_sprintf_summary(char *buf);
+static void _give_summary(bool returns, bool direction);
+#else
+static void _give_summary(bool returns);
+#endif
+
+#endif // SUMMARY_H
+
+#if defined(SUMMARY_IMPL) && !defined(_SUMMARY_H_IMPL)
+#define _SUMMARY_H_IMPL
 static char *sprintf_summary(char *buf) {
 	// assumes the input buffer is at least like 8 KiB long
 
 #if DEBUG
-	BUF_WRITE(buf, "{\n\t\"hcollide\": {\"count\": %u, \"states\": [\"0x%016llx\"]},"
+	BUF_WRITE(buf, "{\n\t\"hcollide\": {\"count\": %u, \"states\": [\"%#018zx\"]},"
 		"\n\t\"trials\": [\"",
 		max_collisions, max_collisions_state
 	);
@@ -105,14 +127,14 @@ static char *sprintf_summary(char *buf) {
 
 		for (u32 i = 0; i < PERIOD_MAX; i++) {
 			unlikely_if (i == max_period) {
-				BUF_WRITE(buf, "\"%u\": %llu", i, data.periods[i]);
+				BUF_WRITE(buf, "\"%u\": %zu", i, data.periods[i]);
 				break;
 			}
 
 			if (data.periods[i] == 0)
 				continue;
 
-			BUF_WRITE(buf, "\"%u\": %llu", i, data.periods[i]);
+			BUF_WRITE(buf, "\"%u\": %zu", i, data.periods[i]);
 			BUF_WRITE(buf, ',', ' ');
 		}
 	} // end bare block
@@ -128,14 +150,14 @@ static char *sprintf_summary(char *buf) {
 
 		for (u32 i = 0; i < TRANSIENT_MAX; i++) {
 			unlikely_if (i == max_transient) {
-				BUF_WRITE(buf, "\"%u\": %llu", i, data.transients[i]);
+				BUF_WRITE(buf, "\"%u\": %zu", i, data.transients[i]);
 				break;
 			}
 
 			if (data.transients[i] == 0)
 				continue;
 
-			BUF_WRITE(buf, "\"%u\": %llu", i, data.transients[i]);
+			BUF_WRITE(buf, "\"%u\": %zu", i, data.transients[i]);
 			BUF_WRITE(buf, ',', ' ');
 		}
 	} // end bare block
@@ -179,7 +201,7 @@ static char *bws_sprintf_summary(char *buf) {
 
 	for (u64 i = 0; i < COMBINED_HIST_SIZE; i++)
 		if (data.combined[i] != 0) {
-			BUF_WRITE(buf, "\"%llu\": %llu", i, data.combined[i]);
+			BUF_WRITE(buf, "\"%zu\": %zu", i, data.combined[i]);
 
 			if (i != max_key)
 				BUF_WRITE(buf, ',', ' ');
@@ -189,7 +211,7 @@ static char *bws_sprintf_summary(char *buf) {
 		const u64 key = bws_hist2->list[i].key;
 
 		if (data.combined[i] != 0) {
-			BUF_WRITE(buf, "\"%llu\": %llu", key, bws_hist2->list[i].cnt);
+			BUF_WRITE(buf, "\"%zu\": %zu", key, bws_hist2->list[i].cnt);
 
 			if (key != max_key)
 				BUF_WRITE(buf, ',', ' ');
@@ -201,7 +223,7 @@ static char *bws_sprintf_summary(char *buf) {
 	return buf - 1; // return a pointer to the first null terminator byte.
 }
 
-static void _give_summary(const bool returns, const bool backwards)
+static void _give_summary(const bool returns, const bool direction)
 #else
 static void _give_summary(const bool returns)
 #endif
@@ -214,16 +236,16 @@ static void _give_summary(const bool returns)
 
 	char *const buf_stt = hashtable.scratch;
 #if BWSEARCH
-	char *buf_end = (backwards ? bws_sprintf_summary : sprintf_summary)(buf_stt);
+	char *buf_end = (direction == SUM_BACKWARDS ? bws_sprintf_summary : sprintf_summary)(buf_stt);
 #else
 	char *buf_end = sprintf_summary(buf_stt);
 #endif
 
 	likely_if (!cfg.silent) {
 		if (cfg.quiet)
-			printf("\r\e[0K");
+			printf("\r\e[K");
 		else
-			puts("\nSummary:");
+			puts("\nSummary:\e[K");
 
 		puts(buf_stt);
 	}
@@ -259,7 +281,7 @@ static void _give_summary(const bool returns)
 		//    update to the new value before exiting, so when the second process gets the
 		//    clipboard, Windows wasn't actually done with the previous data, so when you
 		//    update the clipboard, Windows says "you know what? whoever gave me the first
-		//    data: fuck you. im skipping your data." This is part of why I have to do Sleep
+		//    data: fuck you. I'm skipping your data." This is part of why I have to do Sleep
 		//    even after WaitForSingleObject.
 		// 4. There is no function to do anything along the lines of "wait until the
 		//    clipboard is done". So you have to just wait for like 250ms or 500ms or
@@ -315,13 +337,7 @@ static void _give_summary(const bool returns)
 		const bool file_exists = _access_s(DATAFILE, F_OK) == 0;
 		const i32 fd = _open(DATAFILE, O_CREAT | O_WRONLY | O_BINARY, S_IWRITE);
 
-		// NOTE: technically different instances could race on the last byte of the file,
-		//       but since none of them try to lock it, and none of them try to access it
-		//       until the end of the file is locked, it doesn't matter.
-
-		if (file_exists)
-			_lseeki64(fd, -(i64) __builtin_strlen("\n]\n"), SEEK_END);
-
+		// lock starting from byte 0
 		while (_locking(fd, LK_NBLCK, INT32_MAX) != 0) {
 			i32 error;
 			_get_errno(&error);
@@ -332,8 +348,12 @@ static void _give_summary(const bool returns)
 				exit(EXIT_DATAFILE);
 			}
 
-			Sleep(200); // 5 tries per second
+			Sleep(333); // 3 tries per second
 		}
+
+		if (file_exists)
+			// only seek to the end after acquiring the lock.
+			_lseeki64(fd, -(i64) __builtin_strlen("\n]\n"), SEEK_END);
 
 		const char tmp[2] = {
 			file_exists ? ',' : '[',
@@ -343,7 +363,8 @@ static void _give_summary(const bool returns)
 		_write(fd, &tmp, 2); // either write ",\n" or "[\n"
 		_write(fd, buf_stt, len); // write the object and the end bracket.
 
-		// this happens automatically when _close is called, or when the program exits.
+		// this happens automatically when _close is called, or when the program exits
+		// _lseeki64(fd, 0, SEEK_SET)
 		// _locking(fd, _LK_UNLCK, INT32_MAX);
 
 		if (returns)
@@ -359,9 +380,4 @@ static void _give_summary(const bool returns)
 		exit(EXIT_SUCCESS);
 }
 
-#if BWSEARCH
-#define give_summary(returns, backwards...) \
-	VA_IF(_give_summary(returns, backwards), _give_summary(returns, false), backwards)
-#else
-#define give_summary(returns, backwards...) _give_summary(returns)
-#endif
+#endif // SUMMARY_IMPL

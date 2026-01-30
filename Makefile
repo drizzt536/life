@@ -8,7 +8,7 @@
 # it works for sure with MinGW devkit 2.5 (GCC 15.2, binutils 2.45)
 # the MSYS2 version of GCC won't work because it is UCRT and not MSVCRT.
 
-VERSION := 2.2.0
+VERSION := 2.3.0
 
 CFLAGS     := -Werror -Wall -Wextra -Wno-parentheses -Wno-missing-profile -std=gnu23 \
 			-Iinclude -masm=intel -DPY_BASE=\"analyze\" -DVERSION=\"$(VERSION)\"
@@ -107,10 +107,6 @@ endif
 
 ifdef CLIP
 	CFLAGS += -DCLIPBOARD=$(CLIP)
-endif
-
-ifdef TIMER
-	CFLAGS += -DTIMER=$(TIMER)
 endif
 
 ifdef HELP
@@ -251,23 +247,23 @@ prof.exe: init-crt.o $(CFILES) ruleset.tmp req-gcc
 
 life.gcda: prof.exe req-linux
 ifeq ($(QUIET),true)
-	./$< -H nrun 2500000 &> /dev/null
+	./$< -H nrun 10000000 &> /dev/null
 	./$< -d . step 0xb9078411668e300d 18446744073709551495 &> /dev/null
 	./$< step 0xb112a93586a4b278 7 &> /dev/null
 ifneq ($(BWSEARCH),false)
 	./$< -H bus 0x5e315607a2200650 2 &> /dev/null
-	./$< -q bwsr 0xffffffffffffffff 1 &> /dev/null
-	./$< burn 24 &> /dev/null
+	./$< -q bus 0xffffffffffffffff 1 &> /dev/null
+	./$< burn 64 &> /dev/null
 endif # BWSEARCH
 	./$< -v &> /dev/null
 else # QUIET == false branch
-	./$< -H nrun 2500000
+	./$< -H nrun 10000000
 	./$< -d . step 0xb9078411668e300d 18446744073709551495
 	./$< step 0xb112a93586a4b278 7 &> /dev/null
 ifneq ($(BWSEARCH),false)
 	./$< -H bus 0x5e315607a2200650 2
 	./$< -q bus 0xffffffffffffffff 1
-	./$< burn 24
+	./$< burn 64
 endif # BWSEARCH
 	./$< -v
 endif # QUIET

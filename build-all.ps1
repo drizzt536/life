@@ -5,7 +5,7 @@ function exec([string] $cmd) {
 
 exec 'make distclean'
 
-$make = "make -B DEBUG=true CLIP=true TIMER=true NEIGHBORHOOD=MOORE RULESET=B3/S23 SHELL32=false"
+$make = 'make -B DEBUG=true CLIP=true SHELL32=false NEIGHBORHOOD=MOORE RULESET=B3/S23'
 
 foreach ($isa in $("popcnt", "avx2", "avx512")) {
 	exec "$make ISA=$isa"

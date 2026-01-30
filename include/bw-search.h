@@ -222,7 +222,7 @@ static Matx8 *_gen_combos(Matx8 *restrict out, Matx8 *restrict arr, Matx8 center
 	while (true) {
 		// combine the states together and output the state
 		// TODO: make this a compile-time check based on something like
-		//       max(ALIVE_PRED_COUNT(), DEAD_PRED_COUNT()) * 8
+		//       max(ALIVE_PRED_COUNT(), DEAD_PRED_COUNT()) * sizeof(u64)
 		if ((u64) (out - (Matx8 *) hashtable.scratch) >= SCRATCH_SIZE / sizeof(u64)) {
 			// this shouldn't happen unless the hash table is tuned to be too small.
 			// there shouldn't be more than a few hundred items.
@@ -418,7 +418,8 @@ static u64 advance_ptlstate(Matx8 **const pbuf, const u64 old_cnt, const u64 new
 	return size;
 }
 
-static const StateBuffer *_find_predecessors1m(Matx8 state) {
+// find predecessors from matrix
+static const StateBuffer *_find_predecessors2mb(Matx8 state, const bool check_keys) {
 	// returns the number of predecessors found.
 	// the elements are in the program scratch buffer
 	// tmp - 2 = [allocation size] [partial state count] [partial states...]
@@ -504,6 +505,10 @@ static const StateBuffer *_find_predecessors1m(Matx8 state) {
 
 	// form as many 2x2 boxes as possible as early as possible (reduce the search space)
 	for (u8 i = 0; i < 8; i++) {
+		// row 0
+		if (check_keys && keypressed(cfg.keys.stop))
+			return NULL;
+
 		cnt = advance_ptlstate(
 			&tmp, cnt,
 			states_for_bit(i, (state.rows[0] >> i) & 1),
@@ -512,6 +517,10 @@ static const StateBuffer *_find_predecessors1m(Matx8 state) {
 
 		if (cnt == 0)
 			goto done;
+
+		// row 1
+		if (check_keys && keypressed(cfg.keys.stop))
+			return NULL;
 
 		cnt = advance_ptlstate(
 			&tmp, cnt,
@@ -524,12 +533,16 @@ static const StateBuffer *_find_predecessors1m(Matx8 state) {
 	}
 
 	// starting here, almost all cells form a 2x2 box just by iterating forwards.
-	for (u8 i = 16; i < 64 && cnt > 0; i++)
+	for (u8 i = 16; i < 64 && cnt > 0; i++) {
+		if (check_keys && keypressed(cfg.keys.stop))
+			return NULL;
+
 		cnt = advance_ptlstate(
 			&tmp, cnt,
 			states_for_bit(i, (state.matx >> i) & 1),
 			bit_idx++
 		);
+	}
 
 	// transfer the data from `tmp` to `out`
 	cnt = uniq(tmp, cnt);
@@ -562,16 +575,30 @@ done:
 				tmp[i] = Matx8_tfm(tmp[i], best_tfm);
 	}
 
+	// the post transformations can take a while so check the stop key again
+	if (check_keys && keypressed(cfg.keys.stop))
+		return NULL;
+
 	// point to the element count
 	tmp[-1].matx = cnt;
 	return (StateBuffer *) (tmp - 1);
 }
 
-static FORCE_INLINE const StateBuffer *_find_predecessors1u(u64 state) {
-	return _find_predecessors1m((Matx8) {.matx = state});
+static FORCE_INLINE const StateBuffer *_find_predecessors1m(Matx8 state) {
+	return _find_predecessors2mb(state, false);
 }
 
-static const StateBuffer *_find_predecessors1sb(const StateBuffer *const prev) {
+// find predecessors from u64
+static FORCE_INLINE const StateBuffer *_find_predecessors2ub(u64 state, const bool check_keys) {
+	return _find_predecessors2mb((Matx8) {.matx = state}, check_keys);
+}
+
+static FORCE_INLINE const StateBuffer *_find_predecessors1u(u64 state) {
+	return _find_predecessors2ub(state, false);
+}
+
+// find predecessors from state buffer
+static const StateBuffer *_find_predecessors1a(const StateBuffer *const prev) {
 	// returns a list of all the predecessors of all the given states
 	// frees the old buffer
 	StateBuffer *running = (StateBuffer *) malloc(sizeof(StateBuffer));
@@ -598,8 +625,23 @@ static const StateBuffer *_find_predecessors1sb(const StateBuffer *const prev) {
 	return running;
 }
 
-#define find_predecessors(x) _Generic((x),     \
-	u64                : _find_predecessors1u, \
+static FORCE_INLINE const StateBuffer *_find_predecessors2ab(const StateBuffer *const prev, const bool check_keys) {
+	// the boolean argument for this one is ignored because it won't get propogated.
+	(void) check_keys;
+	return _find_predecessors1a(prev);
+}
+
+#define _find_predecessors2(s, ck) _Generic((s), \
+	Matx8              : _find_predecessors2mb,  \
+	u64                : _find_predecessors2ub,  \
+	const StateBuffer *: _find_predecessors2ab   \
+)(s, ck)
+
+#define _find_predecessors1(s) _Generic((s),   \
 	Matx8              : _find_predecessors1m, \
-	const StateBuffer *: _find_predecessors1sb \
-)(x)
+	u64                : _find_predecessors1u, \
+	const StateBuffer *: _find_predecessors1a  \
+)(s)
+
+#define find_predecessors(s, ck...) \
+	VA_IF(_find_predecessors2(s, ck), _find_predecessors1(s), ck)

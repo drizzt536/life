@@ -1,7 +1,7 @@
 #pragma once
 #define SIM_H
 
-static char *_stringify_count(const sttyp_t t) {
+static FORCE_INLINE char *_stringify_count(const sttyp_t t) {
 	switch (t) {
 		case EMPTY: return "empty";
 		case CONST: return "const";
@@ -50,7 +50,7 @@ static void _cli_sim2(const u64 trial, const Matx8 start_state) {
 				return;
 
 			state = Matx8_next(state);
-		} until (GetAsyncKeyState(cfg.keys.stop) & 0x8000);
+		} until (keypressed(cfg.keys.stop));
 
 		return;
 	}
@@ -75,7 +75,7 @@ static void _cli_sim2(const u64 trial, const Matx8 start_state) {
 		}
 
 		unlikelyp_if (Table_add(state, step, h), 0.999999) {
-			eprintf("Arena OOM: s=0x%016llx, step=%u\n", start_state.matx, step);
+			eprintf("Arena OOM: s=%#018zx, step=%u\n", start_state.matx, step);
 			return;
 		}
 
@@ -86,16 +86,16 @@ static void _cli_sim2(const u64 trial, const Matx8 start_state) {
 		// than whatever is printed currently.
 		printf("\e[Hstate %3u:          \n", step);
 		print_state(state);
-	} until (GetAsyncKeyState(cfg.keys.stop) & 0x8000);
+	} until (keypressed(cfg.keys.stop));
 
 	// abort code when the stop key is pressed.
-	printf("\e[4;22Hs=%016llx", start_state.matx);
+	printf("\e[4;22Hs=%018zx", start_state.matx);
 	printf("\e[5;23Haborting");
 	printf("\e[11;21H");
 	exit(EXIT_SUCCESS);
 
 sim_done:
-	printf("\e[4;22Hs=0x%016llx", start_state.matx);
+	printf("\e[4;22Hs=0x%018zx", start_state.matx);
 	printf("\e[5;22Hd=\"%s\"",
 		_stringify_count(!state.matx ? EMPTY : period == 1 ? CONST : CYCLE));
 	printf("\e[6;22Hp=%u", period);
@@ -125,7 +125,7 @@ static FORCE_INLINE void _cli_sim1(const u64 trial) {
 
 static void _cli_sim_one1(Matx8 state) {
 	unlikely_if (cfg.silent) {
-		do Sleep(cfg.sleep_ms.state); until (GetAsyncKeyState(cfg.keys.stop) & 0x8000);
+		do Sleep(cfg.sleep_ms.state); until (keypressed(cfg.keys.stop));
 		return;
 	}
 
@@ -139,7 +139,7 @@ static void _cli_sim_one1(Matx8 state) {
 
 		printf("\e[H");
 		print_state(state);
-	} until (GetAsyncKeyState(cfg.keys.stop) & 0x8000);
+	} until (keypressed(cfg.keys.stop));
 
 #if DEBUG
 	if (!cfg.quiet)

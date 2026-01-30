@@ -80,12 +80,12 @@
 #define enputs(str) enfputs(stderr, str)
 #define edputs(str) edfputs(stderr, str)
 
-#define OOM(mem, code) ({                    \
-	if ((mem) == NULL) {                      \
-		eprintf("Out of Memory. code: %llu\n", \
-			(unsigned long long int) (code));   \
-		exit(ERRLOG_OOM_EC);                     \
-	}                                             \
+#define OOM(mem, code) ({                  \
+	if ((mem) == NULL) {                    \
+		eprintf("Out of Memory. code: %u\n", \
+			(unsigned int) (code));           \
+		exit(ERRLOG_OOM_EC);                   \
+	}                                           \
 })
 
 #define _VA_ID_IGNORED(...)

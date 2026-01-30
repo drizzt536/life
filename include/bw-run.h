@@ -75,26 +75,35 @@ static u64 bws_increment_hist_value(const u64 key) {
 	return i;
 }
 
-static void _bws_run_once2(const bool quiet, const Matx8 state) {
+static bool _bws_run_once2(const bool quiet, const Matx8 state) {
 	// this assumes cfg.quiet was already force set to true.
 	// the `quiet` argument is used for logging
+	// returns false if the return should propogate (stop key given)
 
-	const u64 key = find_predecessors(state)->size;
+	if (!quiet)
+		printf("\ns=%#018zx, T=%zu\e[A", state.matx, data.trial + 1);
+
+	const StateBuffer *const predecessors = find_predecessors(state, true);
+
+	if (predecessors == NULL)
+		return false;
+
+	data.trial++;
+
+	const u64 key = predecessors->size;
 	const u64  i  = bws_increment_hist_value(key);
 
 	if (quiet)
-		return;
+		return true;
 
 	const u64 c = i == BWS_HIST_PRIMARY_KEY ?
 		data.combined[key] :
 		bws_hist2->list[i].cnt;
 
-	data.trial++;
-
 	// print interesting states
 	// state, number of predecessors, instance count
 	if (c > 5)
-		return;
+		return true;
 
 	// the zero initialization is required so the program doesn't crash in profiling mode.
 	struct _timespec64 ts = {0};
@@ -112,20 +121,21 @@ static void _bws_run_once2(const bool quiet, const Matx8 state) {
 
 	// timestamp is the same format as for the run commands
 
-	printf("\n%03d-%02d:%02d:%02d.%03ld | 0x%016llx | %17llu | ",
-		tm->tm_yday + 1,      // DAY: 001-366
-		tm->tm_hour,          // HH: 00-23
-		tm->tm_min,           // MM
-		tm->tm_sec,           // SS
-		ts.tv_nsec / 1000000, // MS
+	printf("\n%03d-%02d:%02d:%02d.%03d | %#018zx | %17zu | ",
+		tm->tm_yday + 1,              // DAY: 001-366
+		tm->tm_hour,                  // HH: 00-23
+		tm->tm_min,                   // MM
+		tm->tm_sec,                   // SS
+		(int) (ts.tv_nsec / 1000000), // MS
 		state.matx, key
 	);
 
 	print_du64(data.trial);
+	return true;
 }
 
-static FORCE_INLINE void _bws_run_once1(const bool quiet) {
-	_bws_run_once2(quiet, Matx8_random());
+static FORCE_INLINE bool _bws_run_once1(const bool quiet) {
+	return _bws_run_once2(quiet, Matx8_random());
 }
 
 #define bws_run_once(quiet, state...) \
@@ -135,37 +145,44 @@ static void bws_run(u64 n) {
 	const bool original_quiet = cfg.quiet;
 	cfg.quiet = true;
 
-	while (n --> 0)
-		bws_run_once(original_quiet, Matx8_random());
+	while (n --> 0 && bws_run_once(original_quiet));
 
 	cfg.quiet = original_quiet;
 }
 
 static void bws_run_forever(void) {
-	bool update_pressed = false;
-
 	const bool original_quiet = cfg.quiet;
 	cfg.quiet = true;
 
-	while (true) {
-		// these can take a long time, so check keys after every call
-		bws_run_once(original_quiet);
+	u64 last_reset = (u64) _time64(NULL);
 
-		// if you are pressing both keys, print the trial first and then exit.
-		unlikely_if (GetAsyncKeyState(cfg.keys.update) & 0x8000) {
-			if (!update_pressed && likely(!cfg.silent)) {
-				putchar(original_quiet ? '\r' : '\n');
-				printf("trial: ");
-				print_du64(data.trial);
-			}
+	u8 i = 0;
 
-			update_pressed = true;
-		} else
-			update_pressed = false;
+	while (bws_run_once(original_quiet)) {
+		if (++i != 0 || !cfg.file_out)
+			// only check the timer every 256 trials
+			// and only do the timer in the first place for file output.
+			continue;
 
-		unlikelyp_if (GetAsyncKeyState(cfg.keys.stop) & 0x8000, 0.9999) {
-			cfg.quiet = original_quiet;
-			return;
-		}
+		const u64 now = (u64) _time64(NULL);
+
+		likely_if (now < last_reset + TIMER_PERIOD)
+			continue;
+
+		last_reset = now;
+		give_summary(SUM_RETURN, SUM_BACKWARDS); // returning version of the function. never uses the clipboard
+
+		memset(data.raw, 0, DATA_SIZE); // clear data.combined and data.trial at once.
+
+		free(bws_hist2);
+		init_bws_hist2();
+
+		enputs("More than " TOSTRING_EXPANDED(TIMER_PERIOD)
+			" seconds have passed since timer last check. restarting.");
+
+		if (unlikely(cfg.bell) && likely(!cfg.silent))
+			putchar('\x07'); // bell
 	}
+
+	cfg.quiet = original_quiet;
 }

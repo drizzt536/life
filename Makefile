@@ -8,7 +8,7 @@
 # it works for sure with MinGW devkit 2.5 (GCC 15.2, binutils 2.45)
 # the MSYS2 version of GCC won't work because it is UCRT and not MSVCRT.
 
-VERSION := 2.3.0
+VERSION := 2.4.0
 
 CFLAGS     := -Werror -Wall -Wextra -Wno-parentheses -Wno-missing-profile -std=gnu23 \
 			-Iinclude -masm=intel -DPY_BASE=\"analyze\" -DVERSION=\"$(VERSION)\"
@@ -25,6 +25,12 @@ LDFLAGS    := -s -O --as-needed --gc-sections --relax --exclude-all-symbols \
 LDLIBS     := -lcryptbase -lkernel32 -lshell32 -lucrtbase -luser32
 CFILES     := life.c $(wildcard ./include/*.h)
 
+ifeq ($(PROFILE),false)
+	CFLAGS += -DPGO=\"disabled\"
+else
+	CFLAGS += -DPGO=\"enabled\"
+endif
+
 CFLAGS_LIFE_O = -c -fprofile-use -nostdlib -ffreestanding $(CFLAGS) $(COPTZ) $(CPROF_OPTZ)
 
 TRUTH_TABLE_CMD := $$(python ./gen-ruleset.py -tt2 '$(RULESET)' | awk 'BEGIN {ORS = " "} NR==1 {print "-DB_TT=" $$0 "u"} NR==2 {print "-DS_TT=" $$0 "u"; exit}')
@@ -39,25 +45,24 @@ endif
 ifeq ($(ISA),native)
 	COPTZ += -march=native
 	# CFLAGS is updated for native later, except for if profiling is off
-
-	ifeq ($(PROFILE),false)
-		CFLAGS += -DISA=\"native\"
-	endif
 else
-	CFLAGS += -DISA=\"$(ISA)\"
-
-	ifeq ($(ISA),avx512)
-		COPTZ += -march=x86-64-v4
+	CFLAGS += -DISA="\"$(ISA)\""
+	ifeq ($(ISA),adx)
+		COPTZ += -march=x86-64-v2 -mbmi -mbmi2 -mlzcnt -mmovbe -madx
 	else
-		ifeq ($(ISA),avx2)
-			COPTZ += -march=x86-64-v3
+		ifeq ($(ISA),avx512)
+			COPTZ += -march=x86-64-v4
 		else
-			override ISA := popcnt
-			# default to a super old one (POPCNT + SSE4.2)
-			COPTZ += -march=x86-64-v2
-		endif
-	endif
-endif
+			ifeq ($(ISA),avx2)
+				COPTZ += -march=x86-64-v3
+			else
+				override ISA := popcnt
+				# default to a super old one (POPCNT + SSE4.2)
+				COPTZ += -march=x86-64-v2
+			endif # avx2, popcnt
+		endif # avx512
+	endif # adx
+endif # native
 
 
 ifdef ALIVE_CHAR_DEF
@@ -96,6 +101,7 @@ ifdef RAND_BUF_LEN
 			# the unbuffered version uses RDRAND, and none of the versions
 			# come with RDRAND. Also, If you give ISA=native and your
 			# machine doesn't have RDRAND, that should be an error.
+			# otherwise, just assume RDRAND exists on the target machine.
 			CFLAGS += -mrdrnd
 		endif
 	endif
@@ -138,11 +144,15 @@ ifdef SHELL32
 	endif
 endif
 
-ZIPFILE := life-v$(VERSION)-$(ISA).7z
+ifeq ($(PROFILE),false)
+	ZIPFILE := life-v$(VERSION)-$(ISA).noprofile.7z
+else
+	ZIPFILE := life-v$(VERSION)-$(ISA).7z
+endif
 
-all: requirements $(ZIPFILE) life.txt life-launch.txt
+all: requirements $(ZIPFILE) bench
 
-.PHONY: requirements req-7z req-nasm req-linux req-binutils req-gcc req-vcbtools req-python
+.PHONY: requirements req-7z req-nasm req-linux req-binutils req-gcc req-vcbtools req-python bench
 
 requirements: req-7z req-nasm req-vcbtools req-python req-gcc
 
@@ -156,19 +166,19 @@ req-vcbtools:
 req-python:
 else
 req-7z:
-	@if ! command -v 7z > /dev/null; then echo "# program not found: \`7z\`"; exit 1; fi; \
-	echo "# 7zip found"
+	@if ! command -v 7z > /dev/null; then echo "# program not found: \`7z\`"; exit 1; fi;
+	# 7zip found
 
 req-nasm:
-	@if ! command -v nasm > /dev/null; then echo "# program not found: \`nasm\`"; exit 1; fi; \
-	echo "# nasm found"
+	@if ! command -v nasm > /dev/null; then echo "# program not found: \`nasm\`"; exit 1; fi;
+	# nasm found
 
 req-python:
 	@if ! command -v python > /dev/null; then  \
 		echo "# program not found: \`python\`"; \
 		exit 1; \
-	fi; \
-	echo "# python found"
+	fi;
+	# python found
 
 req-gcc: req-linux req-binutils
 	@if ! command -v gcc > /dev/null; then echo "# program not found: \`gcc\`";  exit 1; fi; \
@@ -182,7 +192,7 @@ req-gcc: req-linux req-binutils
 		exit 2;                                 \
 	fi
 	rm -f tmp.exe
-	@echo "# suitable version of GCC found"
+	# suitable version of GCC found
 
 req-linux:
 	@# basic linux utilities \
@@ -191,34 +201,51 @@ req-linux:
 	if ! command -v awk   >/dev/null; then echo "# program not found: \`awk\`";  exit 1; fi; \
 	if ! command -v sed   >/dev/null; then echo "# program not found: \`sed\`";  exit 1; fi; \
 	if ! command -v stat  >/dev/null; then echo "# program not found: \`stat\`"; exit 1; fi; \
-	if ! command -v touch >/dev/null; then echo "# program not found: \`touch\`";exit 1; fi; \
-	echo "# linux utilities found"
+	if ! command -v touch >/dev/null; then echo "# program not found: \`touch\`";exit 1; fi;
+ifneq ($(BENCH),false)
+	@if ! command -v time >/dev/null; then echo "# program not found: \`time\`"; exit 1; fi;
+endif
+	# linux utilities found
 
 req-binutils:
 	@\
 	if ! command -v ld      >/dev/null;then echo "# program not found: \`ld\`";      exit 1;fi; \
 	if ! command -v strip   >/dev/null;then echo "# program not found: \`strip\`";   exit 1;fi; \
 	if ! command -v objcopy >/dev/null;then echo "# program not found: \`objcopy\`"; exit 1;fi; \
-	if ! command -v objdump >/dev/null;then echo "# program not found: \`objdump\`"; exit 1;fi; \
-	echo "# binutils found"
+	if ! command -v objdump >/dev/null;then echo "# program not found: \`objdump\`"; exit 1;fi;
+	# binutils found
 
 req-vcbtools:
 ifndef NO_VC
 	@\
 	if ! command -v editbin >/dev/null;then echo "# program not found: \`editbin\`"; exit 1;fi; \
-	if ! command -v dumpbin >/dev/null;then echo "# program not found: \`dumpbin\`"; exit 1;fi; \
-	echo "# VC Build Tools found"
+	if ! command -v dumpbin >/dev/null;then echo "# program not found: \`dumpbin\`"; exit 1;fi;
+	# VC Build Tools found
 endif # no vc
 endif # require
 
-$(ZIPFILE): life.exe life-launch.exe req-7z analyze.py req-linux
-	7z a -t7z -mx=9 -bso0 -bsp0 $@ life.exe life-launch.exe analyze.py
+bench: life.exe req-linux
+	@# run 10 million trials. this takes around 3 seconds on my machine
+ifeq ($(BENCH),false)
+	# skipping benchmarking
+else
+	# benchmarking (5 trials)
+	time -f %es ./life -Hq nrun 10000000 > /dev/null
+	time -f %es ./life -Hq nrun 10000000 > /dev/null
+	time -f %es ./life -Hq nrun 10000000 > /dev/null
+	time -f %es ./life -Hq nrun 10000000 > /dev/null
+	time -f %es ./life -Hq nrun 10000000 > /dev/null
+endif
 
-	@z=$$(stat -c %s $(ZIPFILE));  \
-	a=$$(stat -c %s analyze.py);    \
-	b=$$(stat -c %s life.exe);       \
-	c=$$(stat -c %s life-launch.exe); \
-	awk "BEGIN {print \"# 7zip reduction: \" 100 - $$z*100 / ($$a + $$b + $$c) \"%\"}"
+$(ZIPFILE): life.exe life-flaunch.exe life-blaunch.exe req-7z analyze.py req-linux
+	7z a -t7z -mx=9 -bso0 -bsp0 $@ life.exe life-flaunch.exe life-blaunch.exe analyze.py
+
+	@z=$$(stat -c %s $(ZIPFILE));   \
+	a=$$(stat -c %s analyze.py);     \
+	b=$$(stat -c %s life.exe);        \
+	c=$$(stat -c %s life-flaunch.exe); \
+	d=$$(stat -c %s life-blaunch.exe);  \
+	awk "BEGIN {print \"# 7zip reduction: \" 100 - $$z*100 / ($$a + $$b + $$c + $$d) \"%\"}"
 
 ruleset.tmp: gen-ruleset.py req-python
 ifdef RULESET
@@ -238,9 +265,21 @@ ifeq ($(PROFILE),false)
 
 life.o: $(CFILES) req-gcc ruleset.tmp
 	@# can't use `-ffreestanding` for some reason
+ifeq ($(ISA),native)
+	@# this is only in this branch. the non-profiling branch can have the regular name
 	truth_table=$(TRUTH_TABLE_CMD); \
-	gcc -c -nostdlib $(CFLAGS) $$truth_table $(COPTZ) $< -o $@
+	flags=$$(gcc -march=native -Q --help=target 2>/dev/null | awk '/enabled/ {print $$1}'); \
+	isa=$$(for f in AVX512 ADX BMI2 AVX2 AVX SSE4.2 SSE4.1 SSSE3 SSE3 SSE2 POPCNT; do echo "$$flags" | grep -iq $$f && { echo $$f; break; }; done); \
+	cpu=$$(wmic cpu get name | sed -n 2p | awk '{$$1=$$1; print}'); \
+	gcc -DISA="\"native (ISA='$$isa', CPU='$$cpu')\"" -c -nostdlib $(CFLAGS) $$truth_table $(COPTZ) $< -o $@.tmp
 else
+	truth_table=$(TRUTH_TABLE_CMD); \
+	gcc -c -nostdlib $(CFLAGS) $$truth_table $(COPTZ) $< -o $@.tmp
+endif # ISA
+
+	objcopy $@.tmp --remove-section .pdata --remove-section .xdata $@
+	strip -S $@
+else # PROFILE
 prof.exe: init-crt.o $(CFILES) ruleset.tmp req-gcc
 	truth_table=$(TRUTH_TABLE_CMD); \
 	gcc -fprofile-generate -DPROFILING=true $(CFLAGS) $$truth_table $(COPTZ) $< life.c -o $@
@@ -256,7 +295,7 @@ ifneq ($(BWSEARCH),false)
 	./$< burn 64 &> /dev/null
 endif # BWSEARCH
 	./$< -v &> /dev/null
-else # QUIET == false branch
+else # QUIET == false
 	./$< -H nrun 10000000
 	./$< -d . step 0xb9078411668e300d 18446744073709551495
 	./$< step 0xb112a93586a4b278 7 &> /dev/null
@@ -268,7 +307,7 @@ endif # BWSEARCH
 	./$< -v
 endif # QUIET
 	@# just spam a bunch of flags to get profiling data on them
-	./$< -adfsSTuh '-' '@' f1 0 90 f2 &> /dev/null
+	./$< -adfsSTuQHRh @ . f1 0 90 f2 6,7
 
 	mv prof-life.gcda $@
 
@@ -277,13 +316,13 @@ ifeq ($(ISA),native)
 	@# this is only in this branch. the non-profiling branch can have the regular name
 	truth_table=$(TRUTH_TABLE_CMD); \
 	flags=$$(gcc -march=native -Q --help=target 2>/dev/null | awk '/enabled/ {print $$1}'); \
-	isa=$$(for f in AVX512 AVX2 AVX SSE4.2 SSE4.1 SSSE3 SSE3 SSE2; do echo "$$flags" | grep -iq $$f && { echo $$f; break; }; done); \
+	isa=$$(for f in AVX512 ADX BMI2 AVX2 AVX SSE4.2 SSE4.1 SSSE3 SSE3 SSE2; do echo "$$flags" | grep -iq $$f && { echo $$f; break; }; done); \
 	cpu=$$(wmic cpu get name | sed -n 2p | awk '{$$1=$$1; print}'); \
 	gcc $(CFLAGS_LIFE_O) $$truth_table -DISA="\"native (ISA='$$isa', CPU='$$cpu')\"" $< -o $@.tmp
 else
 	truth_table=$(TRUTH_TABLE_CMD); \
 	gcc $(CFLAGS_LIFE_O) $$truth_table $< -o $@.tmp
-endif # optimize
+endif # ISA
 
 	objcopy $@.tmp --remove-section .pdata --remove-section .xdata $@
 	strip -S $@
@@ -310,18 +349,36 @@ endif
 
 # wrapper program so double clicking from explorer does something other than exit immediately.
 
-life-launch.o: life-launch.nasm req-nasm req-binutils
+life-flaunch.o: life-flaunch.nasm req-nasm req-binutils
 	nasm -fwin64 $< -o $@
 	strip -S $@
 
-life-launch.exe: life-launch.o req-binutils req-vcbtools
+life-flaunch.exe: life-flaunch.o req-binutils req-vcbtools
 	ld $(LDFLAGS) $< -lucrtbase -lkernel32 -o $@
 	strip -s $@
 ifneq ($(RESERVE),long)
 	editbin -nologo -heap:4096,4096 -stack:4096,4096 $@
 endif
 
-life-launch.txt: life-launch.exe req-binutils req-vcbtools
+life-blaunch.o: life-blaunch.nasm req-nasm req-binutils
+	nasm -fwin64 $< -o $@
+	strip -S $@
+
+life-blaunch.exe: life-blaunch.o req-binutils req-vcbtools
+	ld $(LDFLAGS) $< -lucrtbase -lkernel32 -o $@
+	strip -s $@
+ifneq ($(RESERVE),long)
+	editbin -nologo -heap:4096,4096 -stack:4096,4096 $@
+endif
+
+life-flaunch.txt: life-flaunch.exe req-binutils req-vcbtools
+	objdump -Mintel -D $< > $@
+ifndef NO_VC
+	echo "-----------------------------------" >> $@
+	dumpbin -nologo -headers $< >> $@
+endif
+
+life-blaunch.txt: life-blaunch.exe req-binutils req-vcbtools
 	objdump -Mintel -D $< > $@
 ifndef NO_VC
 	echo "-----------------------------------" >> $@
@@ -334,4 +391,4 @@ clean: req-linux
 	rm -f *.o *.tmp *.gcda prof.exe
 
 distclean: req-linux
-	rm -f *.o *.tmp *.gcda *.exe *.7z life.txt life-launch.txt
+	rm -f *.o *.tmp *.gcda *.exe *.7z life.txt life-?launch.txt

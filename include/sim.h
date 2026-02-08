@@ -75,7 +75,7 @@ static void _cli_sim2(const u64 trial, const Matx8 start_state) {
 		}
 
 		unlikelyp_if (Table_add(state, step, h), 0.999999) {
-			eprintf("Arena OOM: s=%#018zx, step=%u\n", start_state.matx, step);
+			eprintf("Arena OOM: s=0x%016zx, step=%u\n", start_state.matx, step);
 			return;
 		}
 
@@ -89,13 +89,13 @@ static void _cli_sim2(const u64 trial, const Matx8 start_state) {
 	} until (keypressed(cfg.keys.stop));
 
 	// abort code when the stop key is pressed.
-	printf("\e[4;22Hs=%018zx", start_state.matx);
+	printf("\e[4;22Hs=0x%016zx", start_state.matx);
 	printf("\e[5;23Haborting");
 	printf("\e[11;21H");
 	exit(EXIT_SUCCESS);
 
 sim_done:
-	printf("\e[4;22Hs=0x%018zx", start_state.matx);
+	printf("\e[4;22Hs=0x%016zx", start_state.matx);
 	printf("\e[5;22Hd=\"%s\"",
 		_stringify_count(!state.matx ? EMPTY : period == 1 ? CONST : CYCLE));
 	printf("\e[6;22Hp=%u", period);

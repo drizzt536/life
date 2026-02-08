@@ -263,6 +263,7 @@ static FORCE_INLINE Matx8 Matx8__tfm(Matx8 this, const u8 tfm) {
 #elif RAND_BUF_LEN > 256
 	#error "RAND_BUF_LEN must be 256 or less"
 #elif RAND_BUF_LEN == 1
+// assume -mrdrnd is enabled if this branch runs.
 static FORCE_INLINE Matx8 Matx8_random(void) {
 	// RDRAND is only faster than RtlGenRandom in the unbuffered case
 	// 1.53% faster than unbuffered RtlGenRandom

@@ -1,4 +1,4 @@
-// compile with `make -B DEBUG=true CLIP=true SHELL32=false NEIGHBORHOOD=MOORE RULESET=B3/S23 ISA=native`
+// compile with `make -B CLIP=true SHELL32=false NEIGHBORHOOD=MOORE RULESET=B3/S23 ISA=adx`
 
 // I do not care that writing to u.x and then reading from u.y is not defined
 // for unions. C just reinterprets the bits as the other type with no change,
@@ -7,12 +7,14 @@
 // TODO: put the ruleset somewhere in the data.json file.
 //       in the python file, only collapse objects with the same ruleset
 //       or maybe include the ruleset in the filename?
-// TODO: consider making a second version of life-launch for predecessor trial testing.
-// TODO: consider letting the user pass more than one input state to `bwsr`
-// TODO: consider adding a flag to make it so a cell counts as its own neighborhood
+// TODO: consider adding a build flag to make it so a cell counts as its own neighborhood
 // TODO: given a list of states A1, A2, ..., AN, determine if there is a ruleset
 //       under which state A1 => A2, A2 => A3, etc.
-// TODO: idk, maybe figure out if GPU acceleration can work somewhere for this?
+// TODO: update the help text to match the new bwsr behavior
+// TODO: consider making a `-n N` flag instead of having separate count and list commands
+//       for everything. this way, `nrun` and `run` can be the same,
+//       and `nsim` and `sim` can be the same, etc.
+// TODO: allow batching for the 'step' command.
 
 ///////////////////////////////// config start ////////////////////////////////
 
@@ -217,11 +219,11 @@
 #define unlikelyp_until(x, p) while (unlikelyp(!(x), p))
 
 // NOTE: little endian integers are stored backwards.
-#define CHARS1_TO_U08(c0) ((u8) c0)
-#define CHARS2_TO_U16(c0, c1) ((u16)c1 << 8 | (u16)c0)
-#define CHARS4_TO_U32(c0, c1, c2, c3) ((u32)c3 << 24 | (u32)c2 << 16 | (u32)c1 << 8 | (u32)c0)
-#define CHARS8_TO_U64(c0, c1, c2, c3, c4, c5, c6, c7) \
-	((u64)CHARS4_TO_U32(c4, c5, c6, c7) << 32 | (u64)CHARS4_TO_U32(c0, c1, c2, c3))
+#define _1CHARS_TO_U08(c0) ((u8) c0)
+#define _2CHARS_TO_U16(c0, c1) ((u16)c1 << 8 | (u16)c0)
+#define _4CHARS_TO_U32(c0, c1, c2, c3) ((u32)c3 << 24 | (u32)c2 << 16 | (u32)c1 << 8 | (u32)c0)
+#define _8CHARS_TO_U64(c0, c1, c2, c3, c4, c5, c6, c7) \
+	((u64)_4CHARS_TO_U32(c4, c5, c6, c7) << 32 | (u64)_4CHARS_TO_U32(c0, c1, c2, c3))
 
 #include <string.h>      // strcmp, sprintf, memcpy
 #include <time.h>        // _localtime64, _timespec64_get, struct _timespec64, struct tm
@@ -363,7 +365,9 @@ static const char *const help_string =
 	"\n    sim1 [S]       traverse the given state until the stop key is pressed"
 	"\n    step S [N]     step to the next states N times and print out the result"
 #if BWSEARCH
-	"\n    bwsr S [N]     backwards search to find all Nth-generation ancestors to a given state"
+	"\n    bwsr S... N    backwards search to find all Nth-generation ancestors to all given"
+	"\n                   states. If only one state is given, N is optional."
+	"\n                   otherwise, it is always the last argument."
 	"\n    bwrn [N]       runs N random trials on predecessor searches and count results"
 #endif
 	"\n    tfm S T [X Y]  apply a transformation (T) and an optional translation (X, Y)."
@@ -386,6 +390,10 @@ static const char *const help_string =
 	" to make them run until the stop key is given."
 	"\n"
 	"\nbuild config:"
+	#ifdef ISA // the profiling version doesn't always have this
+	"\n    ISA=\""			ISA "\""
+	#endif
+	"\n    PGO=\""			PGO "\""
 	"\n    NEIGHBORHOOD="
 	#if NEIGHBORHOOD == NH_MOORE
 		"MOORE"
@@ -393,9 +401,6 @@ static const char *const help_string =
 		"VON_NEUMANN"
 	#elif NEIGHBORHOOD == NH_DIAGONAL
 		"DIAGONAL"
-	#endif
-	#ifdef ISA // the profiling version doesn't always have this
-	"\n    ISA=\""			ISA "\""
 	#endif
 	"\n    RULESET=\""		RULESET "\""
 	"\n    TABLE_BITS="		TOSTRING_EXPANDED(TABLE_BITS)
@@ -488,7 +493,7 @@ static void log_collisions(void) {
 		return;
 
 	printf("hash collisions: total="); print_du64(total_collisions, '_');
-	printf(", trial max=%u, s=%#018zx\n", max_collisions, max_collisions_state);
+	printf(", trial max=%u, s=0x%016zx\n", max_collisions, max_collisions_state);
 }
 #endif
 
@@ -661,9 +666,12 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 
 				u64 affinity_mask;
 
+				// parse the mask directly, only if the input is hex or binary
 				if (operand[0] == '0' && (operand[1] | 32) == 'x')
-					// parse the mask directly, only if the input is hex
-					affinity_mask = strtoull(operand, &arg_end, 0 /*16*/);
+					// affinity_mask = strtoull(operand + 2, &arg_end, 16);
+					affinity_mask = strtoull(operand, &arg_end, 0);
+				else if (operand[0] == '0' && (operand[1] | 32) == 'b')
+					affinity_mask = strtoull(operand + 2, &arg_end, 2);
 				else {
 					// parse a logical core list, e.g. `-R "2,5,61"`
 					affinity_mask = 0;
@@ -681,7 +689,6 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 						affinity_mask |= 1llu << core;
 						operand_cur = arg_end + 1;
 					} while (*arg_end == ',');
-
 				}
 
 				if (*arg_end != '\0')
@@ -879,7 +886,7 @@ void mainCRTStartup(void)
 	// NOTE: this is safe because the string is at least 3 characters long,
 	//       so it takes up at least 4 bytes including the null terminator.
 	switch (*(u32 *) *argv) {
-	case CHARS4_TO_U32('n', 'r', 'u', 'n'):
+	case _4CHARS_TO_U32('n', 'r', 'u', 'n'):
 		print_table_headers();
 
 		likely_if (argc == 2) {
@@ -906,7 +913,7 @@ void mainCRTStartup(void)
 
 		give_summary(SUM_NO_RETURN);
 		__builtin_unreachable();
-	case CHARS4_TO_U32('r', 'u', 'n',  0 ):
+	case _4CHARS_TO_U32('r', 'u', 'n',  0 ):
 		print_table_headers();
 
 		if (argc == 1)
@@ -926,7 +933,7 @@ void mainCRTStartup(void)
 
 		give_summary(SUM_NO_RETURN);
 		__builtin_unreachable();
-	case CHARS4_TO_U32('s', 'i', 'm',  0 ):
+	case _4CHARS_TO_U32('s', 'i', 'm',  0 ):
 		unlikely_if (argc == 1) {
 			cli_sim(1);
 		#if DEBUG
@@ -950,7 +957,7 @@ void mainCRTStartup(void)
 			putchar('\n');
 		#endif
 		break;
-	case CHARS4_TO_U32('s', 'i', 'm', '1'):
+	case _4CHARS_TO_U32('s', 'i', 'm', '1'):
 		if (argc == 1) {
 			cli_sim_one();
 			exit(EXIT_SUCCESS);
@@ -964,7 +971,7 @@ void mainCRTStartup(void)
 		// argc == 2
 		cli_sim_one(Matx8_tryparse(argv, "sim1", 1));
 		break;
-	case CHARS4_TO_U32('n', 's', 'i', 'm'):
+	case _4CHARS_TO_U32('n', 's', 'i', 'm'):
 		likely_if (argc == 2) {
 			likely_if (streq(argv[1], "inf")) {
 				u64 trial = 0;
@@ -1004,7 +1011,7 @@ void mainCRTStartup(void)
 			putchar('\n');
 		#endif
 		break;
-	case CHARS4_TO_U32('s', 't', 'e', 'p'): {
+	case _4CHARS_TO_U32('s', 't', 'e', 'p'): {
 		unlikely_if (argc < 2 && argc > 3) {
 			eprintf("command `%s` expected %s operands, found %u.\n", "step", "1 or 2", argc - 1);
 			exit(EXIT_CMD_INVOP);
@@ -1040,7 +1047,7 @@ void mainCRTStartup(void)
 			t -= p;
 			n %= p;
 
-			// iterate until it starts repeating
+			// iterate until it gets to the start of the loop
 			while (t --> 0)
 				state = Matx8_next(state);
 		}
@@ -1049,7 +1056,7 @@ void mainCRTStartup(void)
 			state = Matx8_next(state);
 
 		likely_if (!cfg.silent)
-			printf("%#018zx\n", state.matx);
+			printf("0x%016zx\n", state.matx);
 
 		if (!cfg.quiet) {
 			print_state(state);
@@ -1059,40 +1066,58 @@ void mainCRTStartup(void)
 		break;
 	}
 #if BWSEARCH
-	case CHARS4_TO_U32('b', 'u', 's',  0 ): FALLTHROUGH;
-	case CHARS4_TO_U32('b', 'w', 's', 'r'): {
+	case _4CHARS_TO_U32('b', 'u', 's',  0 ): FALLTHROUGH;
+	case _4CHARS_TO_U32('b', 'w', 's', 'r'): {
 		// backwards search
-		unlikely_if (argc < 2 && argc > 3) {
-			eprintf("command `%s` expected %s operands, found %u.\n", "bwsr", "1 or 2", argc - 1);
+		unlikely_if (argc < 2) {
+			eprintf("command `%s` expected %s operands, found %u.\n", "bwsr", "1 or more", argc - 1);
 			exit(EXIT_CMD_INVOP);
 		}
 
-		Matx8 state = Matx8_tryparse(argv, "bwsr", 1);
+		StateBuffer *pdlist;
 
-		n = argc == 2 ? 1 : Matx8_tryparse(argv, "bwsr", 2).matx;
+		_Static_assert(sizeof(StateBuffer) == 1*sizeof(u64),
+			"state buffer should only have a `size` attribute");
 
-		// predecessor list
-		const StateBuffer *pdlist = (StateBuffer *) malloc(sizeof(StateBuffer) + sizeof(Matx8));
+		if (argc == 2) {
+			// the step count argument is optional if there is only one state
+			Matx8 state = Matx8_tryparse(argv, "bwsr", 1);
+			n = 1;
 
-		// cast away the const for initialization
-		((StateBuffer *) pdlist)->size      = 1; // 1 state
-		((StateBuffer *) pdlist)->states[0] = state;
+			// predecessor list
+			pdlist = (StateBuffer *) malloc(sizeof(StateBuffer) + sizeof(Matx8));
+
+			pdlist->size      = 1; // 1 state
+			pdlist->states[0] = state;
+		}
+		else {
+			n = Matx8_tryparse(argv, "bwsr", argc - 1).matx;
+
+			// the step count is the last argument.
+			pdlist = (StateBuffer *) malloc(sizeof(StateBuffer) + (argc - 2)*sizeof(Matx8));
+
+			// cast away the const for initialization
+			pdlist->size = argc - 2;
+
+			for (u32 i = 1; i <= argc - 2; i++)
+				pdlist->states[i - 1] = Matx8_tryparse(argv, "bwsr", i);
+		}
 
 		for (; n > 0 && pdlist->size > 0; n--) {
 			if (!cfg.quiet)
 				printf("%zu step%s remaining\n", n, "s" + (n == 1));
 
-			pdlist = find_predecessors(pdlist);
+			pdlist = (StateBuffer *) find_predecessors((const StateBuffer *) pdlist);
 		}
 
 		likely_if (!cfg.silent)
 			for (u64 i = 0; i < pdlist->size; i++)
-				printf("%#018zx\n", pdlist->states[i].matx);
+				printf("0x%016zx\n", pdlist->states[i].matx);
 
 		break;
 	}
-	case CHARS4_TO_U32('b', 'u', 'r', 'n'): FALLTHROUGH;
-	case CHARS4_TO_U32('b', 'w', 'r', 'n'):
+	case _4CHARS_TO_U32('b', 'u', 'r', 'n'): FALLTHROUGH;
+	case _4CHARS_TO_U32('b', 'w', 'r', 'n'):
 		// backwards run
 		init_bws_hist2();
 
@@ -1119,7 +1144,7 @@ void mainCRTStartup(void)
 		give_summary(SUM_NO_RETURN, SUM_BACKWARDS);
 		__builtin_unreachable();
 #endif
-	case CHARS4_TO_U32('t', 'f', 'm',  0 ): {
+	case _4CHARS_TO_U32('t', 'f', 'm',  0 ): {
 		unlikely_if (argc != 3 && argc != 5) {
 			eprintf("command `%s` expected %s operands, found %u.\n", "tfm", "2 or 4", argc - 1);
 			exit(EXIT_CMD_INVOP);
@@ -1150,7 +1175,7 @@ void mainCRTStartup(void)
 		state = Matx8_yroll(state, roll.y);
 
 		likely_if (!cfg.silent)
-			printf("%#018zx\n", state.matx);
+			printf("0x%016zx\n", state.matx);
 
 		if (!cfg.quiet) {
 			print_state(state);
@@ -1158,13 +1183,13 @@ void mainCRTStartup(void)
 		}
 		break;
 	}
-	case CHARS4_TO_U32('d', 'u', 'm', 'p'):
+	case _4CHARS_TO_U32('d', 'u', 'm', 'p'):
 		exit(system(PY_BASE " -s " DATAFILE));
 		__builtin_unreachable();
-	case CHARS4_TO_U32('f', 'o', 'l', 'd'):
+	case _4CHARS_TO_U32('f', 'o', 'l', 'd'):
 		exit(system(PY_BASE " -f " DATAFILE));
 		__builtin_unreachable();
-	case CHARS4_TO_U32('m', 'e', 'r', 'g'): {
+	case _4CHARS_TO_U32('m', 'e', 'r', 'g'): {
 		unlikely_if (argc != 3) {
 			eprintf("command `%s` expected %s operands, found %u.\n", "merg", "2", argc - 1);
 			exit(EXIT_CMD_INVOP);
@@ -1188,7 +1213,7 @@ void mainCRTStartup(void)
 		exit(system(command));
 		__builtin_unreachable();
 	}
-	case CHARS4_TO_U32('c', 'n', 't',  0 ): {
+	case _4CHARS_TO_U32('c', 'n', 't',  0 ): {
 		const u32 fd = _open(DATAFILE, O_RDONLY | O_BINARY);
 		unlikely_if (fd == ~0u) {
 			i32 error; _get_errno(&error);
@@ -1203,8 +1228,10 @@ void mainCRTStartup(void)
 			exit(EXIT_DATAFILE);
 		}
 
-		u32 objects = 0;
+		// the number of characters in the sequence matched at the end of the previous buffer
 		u8 tmp_len = 0;
+
+		u32 objects = 0;
 		i32 len;
 		char *const restrict buf = hashtable.scratch;
 
@@ -1219,7 +1246,7 @@ void mainCRTStartup(void)
 			default: __builtin_unreachable();
 			case 0: break;
 			case 1:
-				if (*(u16 *)buf == CHARS2_TO_U16('{', '\n') && buf[2] == '\t') {
+				if (*(u16 *)buf == _2CHARS_TO_U16('{', '\n') && buf[2] == '\t') {
 					objects++;
 					i = 3;
 				}
@@ -1227,7 +1254,7 @@ void mainCRTStartup(void)
 					i = 1; // start at the second newline
 				break;
 			case 2:
-				objects += *(u16 *)buf == CHARS2_TO_U16('\n', '\t');
+				objects += *(u16 *)buf == _2CHARS_TO_U16('\n', '\t');
 				i = 2;
 				break;
 			case 3:
@@ -1238,12 +1265,12 @@ void mainCRTStartup(void)
 
 			for (; i <= len - 4; i++)
 				objects += *(u32 *)(hashtable.scratch + i) ==
-							CHARS4_TO_U32('\n', '{', '\n', '\t');
+							_4CHARS_TO_U32('\n', '{', '\n', '\t');
 
-			if (*(u16 *)(buf + len - 3) == CHARS2_TO_U16('\n', '{') &&
+			if (*(u16 *)(buf + len - 3) == _2CHARS_TO_U16('\n', '{') &&
 				hashtable.scratch[len - 1] == '\n')
 				tmp_len = 3;
-			else if (*(u16 *)(buf + len - 2) == CHARS2_TO_U16('\n', '{'))
+			else if (*(u16 *)(buf + len - 2) == _2CHARS_TO_U16('\n', '{'))
 				tmp_len = 2;
 			else if (buf[len - 1] == '\n')
 				tmp_len = 1;
@@ -1261,7 +1288,7 @@ void mainCRTStartup(void)
 			printf(cfg.quiet ? "%u\n" : "found %u objects\n", objects);
 		break;
 	}
-	case CHARS4_TO_U32('h', 'e', 'l', 'p'):
+	case _4CHARS_TO_U32('h', 'e', 'l', 'p'):
 		likely_if (!cfg.silent)
 			puts(help_string);
 		break;

@@ -92,7 +92,7 @@ static void log_if_interesting(Matx8 s0, Matx8 s1, sttyp_t type, u32 step, u32 p
 	**/
 
 	// this will just print `365-17:00:00.000` every time in profiling mode.
-	printf("\n%03d-%02d:%02d:%02d.%03d | %#018zx | %3u | ",
+	printf("\n%03d-%02d:%02d:%02d.%03d | 0x%016zx | %3u | ",
 		tm->tm_yday + 1,              // DAY: 001-366
 		tm->tm_hour,                  // HH: 00-23
 		tm->tm_min,                   // MM
@@ -189,7 +189,7 @@ static void _run_once1(const Matx8 start_state) {
 		}
 
 		unlikelyp_if (Table_add(state, step, h), 0.9999999) {
-			eprintf("\nArena OOM: s=%#018zx, step=%u", start_state.matx, step);
+			eprintf("\nArena OOM: s=0x%016zx, step=%u", start_state.matx, step);
 			return;
 		}
 
@@ -208,7 +208,7 @@ static void _run_once1(const Matx8 start_state) {
 	unlikelyp_if (invalid != 0, 0.9999999) {
 		eprintf(
 			"\ninvalid start state: out of bounds value, reason=\"%s\""
-			": p=%03u, t=%03u, s=%#018zx",
+			": p=%03u, t=%03u, s=0x%016zx",
 			invalid == 1 ? "p" : invalid == 2 ? "p+t"+2 : "p+t",
 			period,
 			step,
@@ -250,7 +250,6 @@ static FORCE_INLINE void _run_once0(void) {
 
 static void run_forever(void) {
 	u64 last_reset = (u64) _time64(NULL);
-start:
 	bool update_pressed = false;
 
 	while (true) {
@@ -303,6 +302,7 @@ start:
 		if (unlikely(cfg.bell) && likely(!cfg.silent))
 			putchar('\x07'); // bell
 
-		goto start;
+		update_pressed = false;
+		// continue
 	} // while
 }

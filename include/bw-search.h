@@ -42,6 +42,16 @@ typedef struct {
 	Matx8 states[];
 } StateBuffer;
 
+#ifdef __BMI2__
+static FORCE_INLINE u16 spread8(const u8 x) {
+	// 32-bit PDEP instruction
+	return __builtin_ia32_pdep_si(x, 0b0101010101010101u);
+
+//	mov 	edx, 0x5555
+//	pdep	eax, ecx, edx
+//	ret
+}
+#else
 constexpr u8 spread4_lut[16] = {
 	0b00000000, 0b00000001, 0b00000100, 0b00000101,
 	0b00010000, 0b00010001, 0b00010100, 0b00010101,
@@ -53,6 +63,7 @@ static FORCE_INLINE u16 spread8(const u8 x) {
 	// double the bit indices for each bit in an 8-bit integer, returning a 16-bit integer
 	return spread4_lut[x >> 4] << 8 | spread4_lut[x & 15];
 }
+#endif
 
 // NOTE: `size` never includes the metadata.
 
@@ -605,6 +616,9 @@ static const StateBuffer *_find_predecessors1a(const StateBuffer *const prev) {
 	running->size = 0;
 
 	for (u64 i = 0; i < prev->size; i++) {
+		if (!cfg.quiet)
+			printf("finding predecessors: state %zu/%zu\n", i + 1, prev->size);
+
 		const StateBuffer *new = _find_predecessors1m(prev->states[i]);
 
 		// append the new states to the running states list

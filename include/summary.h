@@ -12,19 +12,19 @@ static FORCE_INLINE u32 count_args(...) { return __builtin_va_arg_pack_len(); }
 void comptime_error(void) __attribute__((error("")));
 
 // versions of the char[] to uint conversions that ignore extra arguments.
-#define CHARS1_TO_U08_VA(c0, ...)						CHARS1_TO_U08(c0)
-#define CHARS2_TO_U16_VA(c0,c1, ...)					CHARS2_TO_U16(c0,c1)
-#define CHARS4_TO_U32_VA(c0,c1,c2,c3, ...)				CHARS4_TO_U32(c0,c1,c2,c3)
-#define CHARS8_TO_U64_VA(c0,c1,c2,c3,c4,c5,c6,c7, ...)	CHARS8_TO_U64(c0,c1,c2,c3,c4,c5,c6,c7)
+#define _1CHARS_TO_U08_VA(c0, ...)						_1CHARS_TO_U08(c0)
+#define _2CHARS_TO_U16_VA(c0,c1, ...)					_2CHARS_TO_U16(c0,c1)
+#define _4CHARS_TO_U32_VA(c0,c1,c2,c3, ...)				_4CHARS_TO_U32(c0,c1,c2,c3)
+#define _8CHARS_TO_U64_VA(c0,c1,c2,c3,c4,c5,c6,c7, ...)	_8CHARS_TO_U64(c0,c1,c2,c3,c4,c5,c6,c7)
 
 // the character ones have variable arguments so the fuckass compiler can shut the fuck up.
 
 // the one with two 'i's in it has ignored arguments.
 // if you need more than 8 characters, probably switch to the string version.
-#define _BUF_WRITE1c(buf, C...)		({*(u8  *)buf = CHARS1_TO_U08_VA(C); buf += 1;})
-#define _BUF_WRITE2c(buf, C...)		({*(u16 *)buf = CHARS2_TO_U16_VA(C); buf += 2;})
-#define _BUF_WRITE4c(buf, C...)		({*(u32 *)buf = CHARS4_TO_U32_VA(C); buf += 4;})
-#define _BUF_WRITE8c(buf, C...)		({*(u64 *)buf = CHARS8_TO_U64_VA(C); buf += 8;})
+#define _BUF_WRITE1c(buf, C...)		({*(u8  *)buf = _1CHARS_TO_U08_VA(C); buf += 1;})
+#define _BUF_WRITE2c(buf, C...)		({*(u16 *)buf = _2CHARS_TO_U16_VA(C); buf += 2;})
+#define _BUF_WRITE4c(buf, C...)		({*(u32 *)buf = _4CHARS_TO_U32_VA(C); buf += 4;})
+#define _BUF_WRITE8c(buf, C...)		({*(u64 *)buf = _8CHARS_TO_U64_VA(C); buf += 8;})
 #define _BUF_WRITE3c(buf, c0, C...)	({_BUF_WRITE1c(buf, c0); _BUF_WRITE2c(buf, C);})
 #define _BUF_WRITE5c(buf, c0, C...)	({_BUF_WRITE1c(buf, c0); _BUF_WRITE4c(buf, C);})
 #define _BUF_WRITE6c(buf, C...)		({_BUF_WRITE2c(buf, C ); _BUF_WRITEii4c(buf, C);})
@@ -101,7 +101,7 @@ static char *sprintf_summary(char *buf) {
 	// assumes the input buffer is at least like 8 KiB long
 
 #if DEBUG
-	BUF_WRITE(buf, "{\n\t\"hcollide\": {\"count\": %u, \"states\": [\"%#018zx\"]},"
+	BUF_WRITE(buf, "{\n\t\"hcollide\": {\"count\": %u, \"states\": [\"0x%016zx\"]},"
 		"\n\t\"trials\": [\"",
 		max_collisions, max_collisions_state
 	);

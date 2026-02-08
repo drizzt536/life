@@ -33,7 +33,7 @@
 // NOTE: adds a 1-bit value `x` to a 3-bit accumulator. 8 wraps around to 0.
 //       this doesn't matter because 8 and 0 give the same result in all cases.
 //       and it can't wrap around multiple times like it could with a 2-bit accumulator.
-#define _3BIT_ADD(c0, n2, n1, n0, x) ({ \
+#define _3BIT_ACC(c0, n2, n1, n0, x) ({ \
 	c0  = n0 & x;  \
 	n2 ^= n1 & c0; \
 	n1 ^= c0;      \
@@ -52,7 +52,7 @@ static Matx8 Matx8_next(const Matx8 this) {
 		cl = Matx8_xroll(this.matx, 7), // center left
 		cr = Matx8_xroll(this.matx, 1); // center right
 
-	// the code with the _3BIT_ADD stuff is basically just this:
+	// the code with the _3BIT_ACC stuff is basically just this:
 	// neighbors = (ul + uc + ur) + (cl + cr) + (dl + dc + dr)
 	// but avoiding the issue that is it is trying to fit potentially 4 bits of information
 	// into each bit, which will overflow all over the place and return garbage,
@@ -63,11 +63,11 @@ static Matx8 Matx8_next(const Matx8 this) {
 		uc = Matx8_yroll(this.matx, 7), // up center
 		dc = Matx8_yroll(this.matx, 1); // down center
 
-	_3BIT_ADD(c0, n2, n1, n0, cl);
-	_3BIT_ADD(c0, n2, n1, n0, cr);
+	_3BIT_ACC(c0, n2, n1, n0, cl);
+	_3BIT_ACC(c0, n2, n1, n0, cr);
 
-	_3BIT_ADD(c0, n2, n1, n0, uc);
-	_3BIT_ADD(c0, n2, n1, n0, dc);
+	_3BIT_ACC(c0, n2, n1, n0, uc);
+	_3BIT_ACC(c0, n2, n1, n0, dc);
 #endif
 
 #if NEIGHBORHOOD == NH_MOORE || NEIGHBORHOOD == NH_DIAGONAL
@@ -77,11 +77,11 @@ static Matx8 Matx8_next(const Matx8 this) {
 		dl = Matx8_yroll(cl, 1), // down left
 		dr = Matx8_yroll(cr, 1); // down right
 
-	_3BIT_ADD(c0, n2, n1, n0, ul);
-	_3BIT_ADD(c0, n2, n1, n0, ur);
+	_3BIT_ACC(c0, n2, n1, n0, ul);
+	_3BIT_ACC(c0, n2, n1, n0, ur);
 
-	_3BIT_ADD(c0, n2, n1, n0, dl);
-	_3BIT_ADD(c0, n2, n1, n0, dr);
+	_3BIT_ACC(c0, n2, n1, n0, dl);
+	_3BIT_ACC(c0, n2, n1, n0, dr);
 #endif
 
 	const u64 s = this.matx;

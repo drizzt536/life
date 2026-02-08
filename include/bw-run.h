@@ -81,7 +81,7 @@ static bool _bws_run_once2(const bool quiet, const Matx8 state) {
 	// returns false if the return should propogate (stop key given)
 
 	if (!quiet)
-		printf("\ns=%#018zx, T=%zu\e[A", state.matx, data.trial + 1);
+		printf("\ns=0x%016zx, T=%zu\e[A", state.matx, data.trial + 1);
 
 	const StateBuffer *const predecessors = find_predecessors(state, true);
 
@@ -121,7 +121,7 @@ static bool _bws_run_once2(const bool quiet, const Matx8 state) {
 
 	// timestamp is the same format as for the run commands
 
-	printf("\n%03d-%02d:%02d:%02d.%03d | %#018zx | %17zu | ",
+	printf("\n%03d-%02d:%02d:%02d.%03d | 0x%016zx | %17zu | ",
 		tm->tm_yday + 1,              // DAY: 001-366
 		tm->tm_hour,                  // HH: 00-23
 		tm->tm_min,                   // MM

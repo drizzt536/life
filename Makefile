@@ -64,6 +64,14 @@ else
 	endif # adx
 endif # native
 
+ifdef NEIGHBORHOOD
+	CFLAGS += -DNEIGHBORHOOD=NH_$(NEIGHBORHOOD)
+endif
+
+ifdef RULESET
+	CFLAGS += -DRULESET=\"$(RULESET)\"
+	CFLAGS += -DNEXT_COND="$$(cat ruleset.tmp)"
+endif
 
 ifdef ALIVE_CHAR_DEF
 	CFLAGS += -DALIVE_CHAR_DEF=$(ALIVE_CHAR_DEF)
@@ -123,17 +131,12 @@ ifdef BWSEARCH
 	CFLAGS += -DBWSEARCH=$(BWSEARCH)
 endif
 
+ifdef WRAPPER
+	CFLAGS += -DWRAPPER=$(WRAPPER)
+endif
+
 ifdef DEBUG
 	CFLAGS += -DDEBUG=$(DEBUG)
-endif
-
-ifdef NEIGHBORHOOD
-	CFLAGS += -DNEIGHBORHOOD=NH_$(NEIGHBORHOOD)
-endif
-
-ifdef RULESET
-	CFLAGS += -DRULESET=\"$(RULESET)\"
-	CFLAGS += -DNEXT_COND="$$(cat ruleset.tmp)"
 endif
 
 ifdef SHELL32
@@ -258,7 +261,7 @@ endif
 
 init-crt.o: init-crt.nasm req-nasm req-binutils
 	nasm -fwin64 $< -o $@
-	@# only strip debug information. `-s` breaks it.
+	@# only strip debug information. `-s` deletes everything.
 	strip -S $@
 
 ifeq ($(PROFILE),false)

@@ -37,13 +37,13 @@ if ($mode -band 1) {
 
 	foreach ($profiling in @("false", "true")) {
 		foreach ($isa in @("popcnt", "adx", "avx2", "avx512", "native")) {
+			if ($profiling -eq "true" -and $isa -ne "popcnt") {
+				exec 'sleep -s 3'
+			}
+
 			exec "$make ISA=$isa PROFILE=$profiling"
 			exec 'ls *.7z | rename-item -newName { $_.name -replace "\.7z$", ".z7" }'
 			exec 'make distclean'
-
-			if ($profiling -eq "true") {
-				exec 'sleep -s 3'
-			}
 		}
 	}
 

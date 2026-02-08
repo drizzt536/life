@@ -109,6 +109,12 @@
 	#define BWSEARCH true
 #endif
 
+#ifndef WRAPPER
+	// true => dump, merg, fold, and cnt commands
+	// false => don't.
+	#define WRAPPER true
+#endif
+
 #ifndef DEBUG
 	// true => print extra collision data when the program exits.
 	// false => don't.
@@ -412,6 +418,7 @@ static const char *const help_string =
 		"DIAGONAL"
 	#endif
 	"\n    RULESET=\""		RULESET "\""
+	"\n    TIMER_PERIOD="	TOSTRING_EXPANDED(TIMER_PERIOD)
 	"\n    TABLE_BITS="		TOSTRING_EXPANDED(TABLE_BITS)
 	"\n    PERIOD_LEN="		TOSTRING_EXPANDED(PERIOD_LEN)
 	"\n    TRANSIENT_LEN="	TOSTRING_EXPANDED(TRANSIENT_LEN)
@@ -422,7 +429,10 @@ static const char *const help_string =
 	#endif
 	"\n    ARENA_LEN="		TOSTRING_EXPANDED(ARENA_LEN)
 	"\n    CLIPBOARD="		TOSTRING_EXPANDED(CLIPBOARD)
+	"\n    BWSEARCH="		TOSTRING_EXPANDED(BWSEARCH)
+	"\n    WRAPPER="		TOSTRING_EXPANDED(WRAPPER)
 	"\n    DEBUG="			TOSTRING_EXPANDED(DEBUG)
+	"\n    SHELL32="		TOSTRING_EXPANDED(SHELL32)
 	"\n"
 	"\nexit codes:"
 	"\n    " TOSTRING_EXPANDED(EXIT_FAILURE)   "  generic error, likely propogated from a subprocess."
@@ -1262,6 +1272,7 @@ void mainCRTStartup(void)
 
 		break;
 	}
+#if WRAPPER
 	case _4CHARS_TO_U32('d', 'u', 'm', 'p'):
 		exit(system(PY_BASE " -s " DATAFILE));
 		__builtin_unreachable();
@@ -1367,6 +1378,7 @@ void mainCRTStartup(void)
 			printf(cfg.quiet ? "%u\n" : "found %u objects\n", objects);
 		break;
 	}
+#endif
 	case _4CHARS_TO_U32('h', 'e', 'l', 'p'):
 		likely_if (!cfg.silent)
 			puts(help_string);

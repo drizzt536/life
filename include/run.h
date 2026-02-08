@@ -161,7 +161,7 @@ static void log_if_interesting(Matx8 s0, Matx8 s1, sttyp_t type, u32 step, u32 p
 		#endif
 
 
-	if (POPCNT(interest) > 1)
+	unlikely_if (POPCNT(interest) > 1)
 		printf("%u | ", POPCNT(interest));
 	else
 		printf( "  | ");
@@ -180,8 +180,8 @@ static void _run_once1(const Matx8 start_state) {
 		h = Matx8_hash(state);
 		table_value = Table_get(state, h);
 
-		unlikelyp_if (table_value != TABLE_NO_VALUE, 0.92129) {
-			// this happens after on average 34.83 iterations., or 2.87% of the time.
+		unlikelyp_if (table_value != TABLE_NO_VALUE, 1.0 - 1.0/34.83055) {
+			// this happens after on average 34.83 iterations, or 2.87% of the time.
 
 			// the state has already been seen.
 			period = step - table_value;

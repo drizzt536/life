@@ -228,8 +228,6 @@ static void _give_summary(const bool returns, const bool direction)
 static void _give_summary(const bool returns)
 #endif
 {
-	// TODO: consider perhaps using malloc/free if the scratch buffer isn't large enough.
-	// basically this is a static assert of this: TABLE_LEN + ARENA_LEN >= 512
 	_Static_assert(SCRATCH_SIZE >= 8*1024,
 		"SCRATCH_SIZE must be at least 8 KiB for `sprintf_sumary` and `bws_sprintf_sumary`"
 	);
@@ -335,12 +333,11 @@ static void _give_summary(const bool returns)
 		len += __builtin_strlen("\n]\n");
 
 		const bool file_exists = _access_s(DATAFILE, F_OK) == 0;
-		const i32 fd = _open(DATAFILE, O_CREAT | O_WRONLY | O_BINARY, S_IWRITE);
+		const u32 fd = _open(DATAFILE, O_CREAT | O_WRONLY | O_BINARY, S_IWRITE);
 
 		// lock starting from byte 0
-		while (_locking(fd, LK_NBLCK, INT32_MAX) != 0) {
-			i32 error;
-			_get_errno(&error);
+		until (_locking(fd, LK_NBLCK, INT32_MAX) == 0) {
+			i32 error; _get_errno(&error);
 
 			if (error != 13 /* EACCES */) {
 				eprintf("can't %s %s: errno=%u.\n", "lock", DATAFILE, error);
@@ -364,7 +361,7 @@ static void _give_summary(const bool returns)
 		_write(fd, buf_stt, len); // write the object and the end bracket.
 
 		// this happens automatically when _close is called, or when the program exits
-		// _lseeki64(fd, 0, SEEK_SET)
+		// _lseeki64(fd, 0, SEEK_SET);
 		// _locking(fd, _LK_UNLCK, INT32_MAX);
 
 		if (returns)

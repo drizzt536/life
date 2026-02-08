@@ -8,7 +8,7 @@
 # it works for sure with MinGW devkit 2.5 (GCC 15.2, binutils 2.45)
 # the MSYS2 version of GCC won't work because it is UCRT and not MSVCRT.
 
-VERSION := 2.4.0
+VERSION := 2.5.0
 
 CFLAGS     := -Werror -Wall -Wextra -Wno-parentheses -Wno-missing-profile -std=gnu23 \
 			-Iinclude -masm=intel -DPY_BASE=\"analyze\" -DVERSION=\"$(VERSION)\"

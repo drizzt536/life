@@ -7,14 +7,15 @@
 // TODO: put the ruleset somewhere in the data.json file.
 //       in the python file, only collapse objects with the same ruleset
 //       or maybe include the ruleset in the filename?
-// TODO: consider adding a build flag to make it so a cell counts as its own neighborhood
 // TODO: given a list of states A1, A2, ..., AN, determine if there is a ruleset
 //       under which state A1 => A2, A2 => A3, etc.
-// TODO: update the help text to match the new bwsr behavior
 // TODO: consider making a `-n N` flag instead of having separate count and list commands
 //       for everything. this way, `nrun` and `run` can be the same,
 //       and `nsim` and `sim` can be the same, etc.
-// TODO: allow batching for the 'step' command.
+// TODO: consider allowing batching with 'tfm'?
+// TODO: allow `tfm S X Y` in addition to `tfm S T` and `tfm S T X Y`.
+// TODO: figure out why -R is slower than -H, and then either remove it or make it not slower.
+// TODO: consider changing burn to brun. or maybe allow both?
 
 ///////////////////////////////// config start ////////////////////////////////
 
@@ -83,6 +84,11 @@
 
 #ifndef DATAFILE
 	#define DATAFILE "data.json"
+#endif
+
+#ifndef OUTFILE
+	// only for 'step' and 'bwsr' commands.
+	#define OUTFILE "out.txt"
 #endif
 
 #ifndef CLIPBOARD
@@ -330,9 +336,12 @@ static const char *const help_string =
 #if CLIPBOARD
 	"\n    -c   in run modes, copy the summary to the clipboard as well as printing."
 #endif
-	"\n    -f   in run modes, concatenate the summary data together into " DATAFILE "."
+	"\n    -f   in run modes, concatenate the summary data into " DATAFILE "."
+	"\n         in 'step' and 'bwsr' commands, data is placed into " OUTFILE "."
 	"\n    -R   use REALTIME process priority class and lock to the given CPU cores."
-	"\n         the argument can either be a hex core mask or a core list like \"1,2,3\"."
+	"\n         outside of administrator mode, REALTIME does the same thing as HIGH priority."
+	"\n         the argument can be a hex or binary core mask, or a core list like \"1,2,3\"."
+	"\n         if a mask of 0 is given, the CPU affinity is not set."
 	"\n    -H   use HIGH process priority class."
 	"\n    -q   quiet mode. suppresses most non-error output messages."
 	"\n    -Q   silent mode. suppresses all terminal output including error messages."
@@ -363,11 +372,11 @@ static const char *const help_string =
 	"\n    sim [S...]     runs simulations visually on all given states"
 	"\n    nsim [N]       runs N random trials and shows them visually"
 	"\n    sim1 [S]       traverse the given state until the stop key is pressed"
-	"\n    step S [N]     step to the next states N times and print out the result"
+	"\n    step S... N    step to find the Nth-generation descendent to all given states"
+	"\n                   if only one state is given, N is optional."
 #if BWSEARCH
 	"\n    bwsr S... N    backwards search to find all Nth-generation ancestors to all given"
-	"\n                   states. If only one state is given, N is optional."
-	"\n                   otherwise, it is always the last argument."
+	"\n                   states. If only one state is given, N is optional,"
 	"\n    bwrn [N]       runs N random trials on predecessor searches and count results"
 #endif
 	"\n    tfm S T [X Y]  apply a transformation (T) and an optional translation (X, Y)."
@@ -517,12 +526,12 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 		flag = full_flag + 1; // first argument, but skip the dash.
 
 		// --help is the only flag that can be more than one character
-		if (streq(flag, "-help"))
+		unlikely_if (streq(flag, "-help"))
 			goto help_flag;
 
 		fc = *flag; // flag character
 
-		if (fc == '\0')
+		unlikely_if (fc == '\0')
 			goto flag_empty;
 
 		for (; fc != '\0'; fc = *++flag) { // for each flag in the flag set
@@ -544,7 +553,7 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 			#endif
 			case 'T': FALLTHROUGH;
 			case 'S': {
-				if (operand == NULL)
+				unlikely_if (operand == NULL)
 					goto flag_no_operand;
 
 				u32 *const pvar = cfg.sleep_ms.array + (fc == 'S');
@@ -552,7 +561,7 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 				char *arg_end;
 				const u64 tmp = strtoull(operand, &arg_end, 0);
 
-				if (*arg_end != '\0')
+				unlikely_if (*arg_end != '\0')
 					goto flag_invalid_operand;
 
 				*pvar = tmp > UINT32_MAX ? UINT32_MAX : tmp;
@@ -561,7 +570,7 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 			}
 			case 's': FALLTHROUGH;
 			case 'u': {
-				if (operand == NULL)
+				unlikely_if (operand == NULL)
 					goto flag_no_operand;
 
 				u8 *const pkey = cfg.keys.array + (fc == 'u');
@@ -621,7 +630,7 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 					default :
 						// parse stuff like -s fn as -s 110
 						// basically make it uppercase and use that as the key code
-						if ('a' <= operand[1] && operand[1] <= 'z') {
+						likely_if ('a' <= operand[1] && operand[1] <= 'z') {
 							*pkey = operand[1] & ~32; // set uppercase
 							break;
 						}
@@ -634,7 +643,7 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 					char *arg_end;
 					const u64 vkey = strtoull(operand, &arg_end, 0);
 
-					if (*arg_end != '\0' || vkey > UINT8_MAX)
+					unlikely_if (*arg_end != '\0' || vkey > UINT8_MAX)
 						goto flag_invalid_operand;
 
 					*pkey = vkey;
@@ -647,10 +656,10 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 			case 'd': {
 				char *const pchar = cfg.sim_chars.array + (fc == 'a');
 
-				if (operand == NULL)
+				unlikely_if (operand == NULL)
 					goto flag_no_operand;
 
-				if (*operand == '\0')
+				unlikely_if (*operand == '\0')
 					goto flag_invalid_operand;
 
 				// NOTE: characters after the first are ignored.
@@ -659,45 +668,47 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 				break;
 			}
 			case 'R': {
-				if (operand == NULL)
+				unlikely_if (operand == NULL)
 					goto flag_no_operand;
 
 				char *arg_end;
 
-				u64 affinity_mask;
+				u64 cpu_affinity_mask;
 
-				// parse the mask directly, only if the input is hex or binary
+				// NOTE: leading whitespace will cause masks to be read as a core index.
+
+				// only parse the mask directly if the input is hex or binary
 				if (operand[0] == '0' && (operand[1] | 32) == 'x')
-					// affinity_mask = strtoull(operand + 2, &arg_end, 16);
-					affinity_mask = strtoull(operand, &arg_end, 0);
+					cpu_affinity_mask = strtoull(operand, &arg_end, 0);
 				else if (operand[0] == '0' && (operand[1] | 32) == 'b')
-					affinity_mask = strtoull(operand + 2, &arg_end, 2);
+					cpu_affinity_mask = strtoull(operand + 2, &arg_end, 2);
 				else {
 					// parse a logical core list, e.g. `-R "2,5,61"`
-					affinity_mask = 0;
+					cpu_affinity_mask = 0;
 
-					// use a separate pointer in case the affinity mask is invalid later
-					// and it flag_invalid_operand needs the pointer to the start of the string.
+					// use a separate pointer in case the affinity mask is invalid later.
+					// flag_invalid_operand will need the pointer to the start of the string.
 					char *operand_cur = operand;
 					do {
 						const u64 core = strtoull(operand_cur, &arg_end, 0);
 
-						if (core > 63)
+						unlikely_if (core > 63)
 							goto flag_invalid_operand;
 
 						// NOTE: passing something like `-R "2,2,2,2,2,2"` is the same as `-R 2`
-						affinity_mask |= 1llu << core;
+						cpu_affinity_mask |= 1llu << core;
 						operand_cur = arg_end + 1;
 					} while (*arg_end == ',');
 				}
 
-				if (*arg_end != '\0')
+				unlikely_if (*arg_end != '\0')
 					goto flag_invalid_operand;
 
 				void *const process = GetCurrentProcess();
 				SetPriorityClass(process, REALTIME_PRIORITY_CLASS);
 
-				if (!SetProcessAffinityMask(process, affinity_mask))
+				// affinity
+				if (likely(cpu_affinity_mask != 0) && unlikely(!SetProcessAffinityMask(process, cpu_affinity_mask)))
 					goto flag_invalid_operand;
 
 				POP_ARG();
@@ -712,13 +723,13 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 			case 'v':
 			#if HELP
 				// NOTE: this works because `help_string` starts with `"life v" VERSION`
-				if (!cfg.quiet)
+				likely_if (!cfg.quiet)
 					printf("%.*s\n", 6 + (i32) __builtin_strlen(VERSION), help_string);
 				else likely_if (!cfg.silent)
 					printf("%.*s\n", (i32) __builtin_strlen(VERSION), help_string + 6);
 			#else
 				// store a separate string from the help text.
-				if (!cfg.quiet)
+				likely_if (!cfg.quiet)
 					puts("life v" VERSION);
 				else likely_if (!cfg.silent)
 					puts("life v" VERSION + 6);
@@ -834,7 +845,7 @@ void mainCRTStartup(void)
 	do { // do while false
 		const bool flags_given = parse_flags(&argc, &argv);
 
-		if (argc != 0)
+		likely_if (argc != 0)
 			// there are more arguments left
 			break;
 
@@ -916,12 +927,12 @@ void mainCRTStartup(void)
 	case _4CHARS_TO_U32('r', 'u', 'n',  0 ):
 		print_table_headers();
 
-		if (argc == 1)
+		unlikely_if (argc == 1)
 			run_once();
 		else
 			// run once for each state given
 			for (u32 i = 1; i < argc; i++) {
-				if (cfg.silent)
+				unlikely_if (cfg.silent)
 					run_once(Matx8_tryparse(argv, "run", i));
 				else {
 					putchar('\n');
@@ -974,13 +985,11 @@ void mainCRTStartup(void)
 	case _4CHARS_TO_U32('n', 's', 'i', 'm'):
 		likely_if (argc == 2) {
 			likely_if (streq(argv[1], "inf")) {
-				u64 trial = 0;
+				u64 trial = 1;
 
 				while (true) {
-					if (trial)
-						Sleep(cfg.sleep_ms.trial);
-
-					cli_sim(++trial);
+					cli_sim(trial++);
+					Sleep(cfg.sleep_ms.trial);
 				}
 
 				__builtin_unreachable();
@@ -988,7 +997,7 @@ void mainCRTStartup(void)
 
 			n = Matx8_tryparse(argv, "nsim", 1).matx;
 		}
-		else if (argc == 1)
+		else likely_if (argc == 1)
 			n = 1; // default to one trial.
 		else {
 			eprintf("command `%s` expected %s operands, found %u.\n", "nsim", "0 or 1", argc - 1);
@@ -1012,57 +1021,99 @@ void mainCRTStartup(void)
 		#endif
 		break;
 	case _4CHARS_TO_U32('s', 't', 'e', 'p'): {
-		unlikely_if (argc < 2 && argc > 3) {
-			eprintf("command `%s` expected %s operands, found %u.\n", "step", "1 or 2", argc - 1);
+		unlikely_if (argc < 2) {
+			eprintf("command `%s` expected %s operands, found %u.\n", "step", "1 or more", argc - 1);
 			exit(EXIT_CMD_INVOP);
 		}
 
-		Matx8 state = Matx8_tryparse(argv, "step", 1);
+		n = argc == 2 ? 1 : Matx8_tryparse(argv, "step", argc - 1).matx;
 
-		if (argc == 2)
-			n = 1;
-		else
-			n = Matx8_tryparse(argv, "step", 2).matx;
+	#pragma GCC diagnostic push
+	#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+		// the compiler doesn't realize that fd is only used after it is initialized,
+		// because cfg.file_out doesn't change between the two points.
+		argc -= 1 + (argc > 2);
+		u32 fd;
 
-		if (n >= STEP_MOD_THRESH) {
-			const bool original_quiet = cfg.quiet;
-			cfg.quiet = true;
-			run_once(state);
+		if (cfg.file_out) {
+			fd = _open(OUTFILE, O_CREAT | O_WRONLY | O_BINARY, S_IWRITE);
+
+			unlikelyp_if (fd == ~0u, 0.9999999) {
+				i32 error; _get_errno(&error);
+				eprintf("can't %s %s: errno=%u.\n", "open", OUTFILE, error);
+				exit(EXIT_DATAFILE);
+			}
+
+			unlikely_if (_locking(fd, LK_NBLCK, INT32_MAX) != 0) {
+				// only try once because I don't feel like looping.
+				i32 error; _get_errno(&error);
+				eprintf("can't %s %s: errno=%u.\n", "lock", OUTFILE, error);
+				exit(EXIT_DATAFILE);
+			}
+
+			_lseeki64(fd, 0, SEEK_END);
+		}
+
+		for (u32 si = 1; si <= argc; si++) {
+			Matx8 state = Matx8_tryparse(argv, "step", si);
+			Matx8 orig_state = state;
+			u64 k = n; // local value of n.
+
+			unlikely_if (n >= STEP_MOD_THRESH) {
+				const bool original_quiet = cfg.quiet;
+				cfg.quiet = true;
+				run_once(state);
+				cfg.quiet = original_quiet;
+
+				u32 p, t;
+
+				for (p = 0; data.periods[p] == 0; p++)
+					if (p >= PERIOD_MAX)
+						__builtin_unreachable();
+
+				for (t = 0; data.transients[t] == 0; t++)
+					if (t >= TRANSIENT_MAX)
+						__builtin_unreachable();
+
+				k -= t;
+				t -= p;
+				k %= p;
+
+				// iterate until it gets to the start of the loop
+				while (t --> 0)
+					state = Matx8_next(state);
+			}
+
+			while (k --> 0)
+				state = Matx8_next(state);
+
+			if (cfg.file_out) _write(
+				fd,
+				hashtable.scratch,
+				sprintf(hashtable.scratch, "0x%016zx => 0x%016zx\n" + 12, state.matx)
+			);
+
+			if (!cfg.quiet)
+				printf("0x%016zx => 0x%016zx\n", orig_state.matx, state.matx);
+			else likely_if (!cfg.silent)
+				printf("0x%016zx => 0x%016zx\n" + 12, state.matx);
+
+			if (!cfg.quiet) {
+				print_state(state);
+				putchar('\n');
+
+				if (si < argc)
+					putchar('\n');
+			}
+		} // for
+
+	#pragma GCC diagnostic pop
+
 		#if DEBUG
 			total_collisions = 0;
 		#endif
-			cfg.quiet = original_quiet;
 
-			u32 p, t;
-
-			for (p = 0; data.periods[p] == 0; p++)
-				if (p >= PERIOD_MAX)
-					__builtin_unreachable();
-
-			for (t = 0; data.transients[t] == 0; t++)
-				if (t >= TRANSIENT_MAX)
-					__builtin_unreachable();
-
-			n -= t;
-			t -= p;
-			n %= p;
-
-			// iterate until it gets to the start of the loop
-			while (t --> 0)
-				state = Matx8_next(state);
-		}
-
-		while (n --> 0)
-			state = Matx8_next(state);
-
-		likely_if (!cfg.silent)
-			printf("0x%016zx\n", state.matx);
-
-		if (!cfg.quiet) {
-			print_state(state);
-			putchar('\n');
-		}
-
+		// the OS will unlock and close the file itself
 		break;
 	}
 #if BWSEARCH
@@ -1110,9 +1161,36 @@ void mainCRTStartup(void)
 			pdlist = (StateBuffer *) find_predecessors((const StateBuffer *) pdlist);
 		}
 
+
+		if (cfg.file_out) {
+			const u32 fd = _open(OUTFILE, O_CREAT | O_WRONLY | O_BINARY, S_IWRITE);
+
+			unlikelyp_if (fd == ~0u, 0.9999999) {
+				i32 error; _get_errno(&error);
+				eprintf("can't %s %s: errno=%u.\n", "open", OUTFILE, error);
+				exit(EXIT_DATAFILE);
+			}
+
+			unlikely_if (_locking(fd, LK_NBLCK, INT32_MAX) != 0) {
+				// only try once because I don't feel like looping.
+				i32 error; _get_errno(&error);
+				eprintf("can't %s %s: errno=%u.\n", "lock", OUTFILE, error);
+				exit(EXIT_DATAFILE);
+			}
+
+			_lseeki64(fd, 0, SEEK_END);
+
+			*(u16 *) hashtable.scratch = _2CHARS_TO_U16('0', 'x');
+
+			for (u64 i = 0; i < pdlist->size; i++) {
+				sprintf(hashtable.scratch + 2, "0x%016zx => 0x%016zx\n" + 14, pdlist->states[i].matx);
+				_write(fd, hashtable.scratch, 2 + 16 + 1);
+			}
+		}
+
 		likely_if (!cfg.silent)
 			for (u64 i = 0; i < pdlist->size; i++)
-				printf("0x%016zx\n", pdlist->states[i].matx);
+				printf("0x%016zx => 0x%016zx\n" + 12, pdlist->states[i].matx);
 
 		break;
 	}
@@ -1150,10 +1228,10 @@ void mainCRTStartup(void)
 			exit(EXIT_CMD_INVOP);
 		}
 
-		Matx8 state = Matx8_tryparse(argv, "tfm", 1);
+		Matx8 state   = Matx8_tryparse(argv, "tfm", 1);
 		const u64 tfm = Matx8_tryparse(argv, "tfm", 2).matx;
 
-		if (tfm >= sizeof(tfm_strs) / sizeof(*tfm_strs))
+		unlikely_if (tfm >= sizeof(tfm_strs) / sizeof(*tfm_strs))
 			cmd_invalid_operand("tfm", 2);
 
 		Point8 roll;
@@ -1162,11 +1240,11 @@ void mainCRTStartup(void)
 			roll = (Point8) {0};
 		else {
 			u64 tmp = Matx8_tryparse(argv, "tfm", 3).matx;
-			if (tmp > 7) cmd_invalid_operand("tfm", 3);
+			unlikely_if (tmp > 7) cmd_invalid_operand("tfm", 3);
 			roll.x = tmp;
 
 			tmp = Matx8_tryparse(argv, "tfm", 4).matx;
-			if (tmp > 7) cmd_invalid_operand("tfm", 4);
+			unlikely_if (tmp > 7) cmd_invalid_operand("tfm", 4);
 			roll.y = tmp;
 		}
 
@@ -1175,12 +1253,13 @@ void mainCRTStartup(void)
 		state = Matx8_yroll(state, roll.y);
 
 		likely_if (!cfg.silent)
-			printf("0x%016zx\n", state.matx);
+			printf("0x%016zx => 0x%016zx\n" + 12, state.matx);
 
 		if (!cfg.quiet) {
 			print_state(state);
 			putchar('\n');
 		}
+
 		break;
 	}
 	case _4CHARS_TO_U32('d', 'u', 'm', 'p'):
@@ -1200,7 +1279,7 @@ void mainCRTStartup(void)
 		for (u8 i, j = 1; j < 3; j++) {
 			for (i = 0; i < UINT8_MAX && argv[j][i] != '\0'; i++);
 
-			if (i == UINT8_MAX)
+			unlikely_if (i == UINT8_MAX)
 				cmd_invalid_operand("merg", i);
 		}
 
@@ -1221,7 +1300,7 @@ void mainCRTStartup(void)
 			exit(EXIT_DATAFILE);
 		}
 
-		if (_locking(fd, LK_NBLCK, INT32_MAX) != 0) {
+		unlikely_if (_locking(fd, LK_NBLCK, INT32_MAX) != 0) {
 			// only try once because I don't feel like looping.
 			i32 error; _get_errno(&error);
 			eprintf("can't %s %s: errno=%u.\n", "lock", DATAFILE, error);
@@ -1278,7 +1357,7 @@ void mainCRTStartup(void)
 				tmp_len = 0;
 		}
 
-		if (len == -1) {
+		unlikely_if (len == -1) {
 			i32 error; _get_errno(&error);
 			eprintf("can't %s %s: errno=%u.\n", "read", DATAFILE, error);
 			exit(EXIT_DATAFILE);

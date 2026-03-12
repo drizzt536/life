@@ -127,14 +127,14 @@ static char *sprintf_summary(char *buf) {
 
 		for (u32 i = 0; i < PERIOD_MAX; i++) {
 			unlikely_if (i == max_period) {
-				BUF_WRITE(buf, "\"%u\": %zu", i, data.periods[i]);
+				BUF_WRITE(buf, "\"%zu\": %zu", (u64) i, data.periods[i]);
 				break;
 			}
 
 			if (data.periods[i] == 0)
 				continue;
 
-			BUF_WRITE(buf, "\"%u\": %zu", i, data.periods[i]);
+			BUF_WRITE(buf, "\"%zu\": %zu", (u64) i, data.periods[i]);
 			BUF_WRITE(buf, ',', ' ');
 		}
 	} // end bare block
@@ -150,14 +150,14 @@ static char *sprintf_summary(char *buf) {
 
 		for (u32 i = 0; i < TRANSIENT_MAX; i++) {
 			unlikely_if (i == max_transient) {
-				BUF_WRITE(buf, "\"%u\": %zu", i, data.transients[i]);
+				BUF_WRITE(buf, "\"%zu\": %zu", (u64) i, data.transients[i]);
 				break;
 			}
 
 			if (data.transients[i] == 0)
 				continue;
 
-			BUF_WRITE(buf, "\"%u\": %zu", i, data.transients[i]);
+			BUF_WRITE(buf, "\"%zu\": %zu", (u64) i, data.transients[i]);
 			BUF_WRITE(buf, ',', ' ');
 		}
 	} // end bare block

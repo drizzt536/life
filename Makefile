@@ -5,25 +5,26 @@
 	# VC build tools: dumpbin, editbin (optional)
 	# misc: 7z, wmic, nasm, python (>=3.12)
 
-# it works for sure with MinGW devkit 2.5 (GCC 15.2, binutils 2.45)
+# this works for sure with MinGW devkit 2.5 (GCC 15.2, binutils 2.45)
 # the MSYS2 version of GCC won't work because it is UCRT and not MSVCRT.
 
-VERSION := 2.5.0
+VERSION := 3.0.0
 
-CFLAGS     := -Werror -Wall -Wextra -Wno-parentheses -Wno-missing-profile -std=gnu23 \
+CFLAGS      := -Werror -Wall -Wextra -Wno-parentheses -Wno-missing-profile -std=gnu23 \
 			-Iinclude -masm=intel -DPY_BASE=\"analyze\" -DVERSION=\"$(VERSION)\"
-COPTZ      := -Ofast -fdelete-dead-exceptions -ffinite-loops -fgcse-las -fgcse-sm \
+COPTZ       := -Ofast -fdelete-dead-exceptions -ffinite-loops -fgcse-las -fgcse-sm \
 			-fipa-pta -fira-loop-pressure -flive-range-shrinkage -frename-registers \
 			-fshort-enums -ftree-loop-if-convert -ftree-vectorize -fvpt -fweb -fwrapv \
 			-fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-ident
-CPROF_OPTZ := -fprofile-partial-training -fbranch-probabilities -fipa-profile \
+CPROF_OPTZ  := -fprofile-partial-training -fbranch-probabilities -fipa-profile \
 			-fprofile-reorder-functions
-LDFLAGS    := -s -O --as-needed --gc-sections --relax --exclude-all-symbols \
+PROF_CFLAGS := -fprofile-generate -DPROFILING=true
+LDFLAGS     := -s -O --as-needed --gc-sections --relax --exclude-all-symbols \
 			--no-export-dynamic --disable-long-section-names --no-seh \
 			--nxcompat --dynamicbase --high-entropy-va \
 			--fatal-warnings --warn-common --warn-constructors
-LDLIBS     := -lcryptbase -lkernel32 -lshell32 -lucrtbase -luser32
-CFILES     := life.c $(wildcard ./include/*.h)
+LDLIBS      := -lcryptbase -lkernel32 -lshell32 -lucrtbase -luser32
+CFILES      := life.c $(wildcard ./include/*.h)
 
 ifeq ($(PROFILE),false)
 	CFLAGS += -DPGO=\"disabled\"
@@ -44,24 +45,27 @@ endif
 # architecture to optimize for
 ifeq ($(ISA),native)
 	COPTZ += -march=native
-	# CFLAGS is updated for native later, except for if profiling is off
+	# CFLAGS is updated for native later
 else
 	CFLAGS += -DISA="\"$(ISA)\""
+
 	ifeq ($(ISA),adx)
 		COPTZ += -march=x86-64-v2 -mbmi -mbmi2 -mlzcnt -mmovbe -madx
+		LDFLAGS += radix-sort.o
+		PROF_CFLAGS += radix-sort.o
+	else ifeq ($(ISA),avx512)
+		COPTZ += -march=x86-64-v4 -madx
+		LDFLAGS += radix-sort.o
+		PROF_CFLAGS += radix-sort.o
+	else ifeq ($(ISA),avx2)
+		COPTZ += -march=x86-64-v3
+		INCLUDE_RADIX := false
 	else
-		ifeq ($(ISA),avx512)
-			COPTZ += -march=x86-64-v4
-		else
-			ifeq ($(ISA),avx2)
-				COPTZ += -march=x86-64-v3
-			else
-				override ISA := popcnt
-				# default to a super old one (POPCNT + SSE4.2)
-				COPTZ += -march=x86-64-v2
-			endif # avx2, popcnt
-		endif # avx512
-	endif # adx
+		override ISA := popcnt
+		# default to a super old one (POPCNT + SSE4.2)
+		COPTZ += -march=x86-64-v2
+		INCLUDE_RADIX := false
+	endif
 endif # native
 
 ifdef NEIGHBORHOOD
@@ -104,11 +108,11 @@ endif
 ifdef RAND_BUF_LEN
 	CFLAGS += -DRAND_BUF_LEN=$(RAND_BUF_LEN)
 
-	ifeq ($(RAND_BUF_LEN), 1)
+	ifeq ($(RAND_BUF_LEN),1)
 		ifneq ($(ISA),native)
-			# the unbuffered version uses RDRAND, and none of the versions
-			# come with RDRAND. Also, If you give ISA=native and your
-			# machine doesn't have RDRAND, that should be an error.
+			# the unbuffered version uses RDRAND, and none of the `-march`
+			# options come with RDRAND. Also, If ISA=native is given and
+			# the machine doesn't have RDRAND, that should be an error.
 			# otherwise, just assume RDRAND exists on the target machine.
 			CFLAGS += -mrdrnd
 		endif
@@ -233,11 +237,11 @@ ifeq ($(BENCH),false)
 	# skipping benchmarking
 else
 	# benchmarking (5 trials)
-	time -f %es ./life -Hq nrun 10000000 > /dev/null
-	time -f %es ./life -Hq nrun 10000000 > /dev/null
-	time -f %es ./life -Hq nrun 10000000 > /dev/null
-	time -f %es ./life -Hq nrun 10000000 > /dev/null
-	time -f %es ./life -Hq nrun 10000000 > /dev/null
+	time -f %es ./life -Hqn 10000000 frun > /dev/null
+	time -f %es ./life -Hqn 10000000 frun > /dev/null
+	time -f %es ./life -Hqn 10000000 frun > /dev/null
+	time -f %es ./life -Hqn 10000000 frun > /dev/null
+	time -f %es ./life -Hqn 10000000 frun > /dev/null
 endif
 
 $(ZIPFILE): life.exe life-flaunch.exe life-blaunch.exe req-7z analyze.py req-linux
@@ -264,6 +268,10 @@ init-crt.o: init-crt.nasm req-nasm req-binutils
 	@# only strip debug information. `-s` deletes everything.
 	strip -S $@
 
+radix-sort.o: radix-sort.nasm req-nasm req-binutils
+	nasm -fwin64 $< -o $@
+	strip -S $@
+
 ifeq ($(PROFILE),false)
 
 life.o: $(CFILES) req-gcc ruleset.tmp
@@ -283,29 +291,38 @@ endif # ISA
 	objcopy $@.tmp --remove-section .pdata --remove-section .xdata $@
 	strip -S $@
 else # PROFILE
-prof.exe: init-crt.o $(CFILES) ruleset.tmp req-gcc
+prof.exe: init-crt.o radix-sort.o $(CFILES) ruleset.tmp req-gcc
+ifeq ($(ISA),native)
 	truth_table=$(TRUTH_TABLE_CMD); \
-	gcc -fprofile-generate -DPROFILING=true $(CFLAGS) $$truth_table $(COPTZ) $< life.c -o $@
+	if [ $$(gcc -Q --help=target -march=native | grep -F adx | grep -Fq enabled) ]; then \
+		gcc $(PROF_CFLAGS) $(CFLAGS) $$truth_table $(COPTZ) $< life.c -o $@
+	else                                                                     \
+		gcc $(PROF_CFLAGS) $(CFLAGS) $$truth_table $(COPTZ) $< radix-sort.o life.c -o $@
+	fi;
+else
+	truth_table=$(TRUTH_TABLE_CMD); \
+	gcc $(PROF_CFLAGS) $(CFLAGS) $$truth_table $(COPTZ) $< life.c -o $@
+endif # radix sort
 
 life.gcda: prof.exe req-linux
 ifeq ($(QUIET),true)
-	./$< -H nrun 10000000 &> /dev/null
-	./$< -d . step 0xb9078411668e300d 18446744073709551495 &> /dev/null
-	./$< step 0xb112a93586a4b278 7 &> /dev/null
+	./$< -Hn 10000000 frun &> /dev/null
+	./$< -dn . 18446744073709551495 step 0xb9078411668e300d &> /dev/null
+	./$< -n 7 step 0xb112a93586a4b278 &> /dev/null
 ifneq ($(BWSEARCH),false)
-	./$< -H bus 0x5e315607a2200650 2 &> /dev/null
-	./$< -q bus 0xffffffffffffffff 1 &> /dev/null
-	./$< burn 64 &> /dev/null
+	./$< -Hn 2 bus 0x5e315607a2200650 &> /dev/null
+	./$< -qn 1 bus 0xffffffffffffffff &> /dev/null
+	./$< -n 64 brun &> /dev/null
 endif # BWSEARCH
 	./$< -v &> /dev/null
 else # QUIET == false
-	./$< -H nrun 10000000
-	./$< -d . step 0xb9078411668e300d 18446744073709551495
-	./$< step 0xb112a93586a4b278 7 &> /dev/null
+	./$< -Hn 10000000 frun
+	./$< -dn . 18446744073709551495 step 0xb9078411668e300d
+	./$< -n 7 step 0xb112a93586a4b278 &> /dev/null
 ifneq ($(BWSEARCH),false)
-	./$< -H bus 0x5e315607a2200650 2
-	./$< -q bus 0xffffffffffffffff 1
-	./$< burn 64
+	./$< -Hn 2 bus 0x5e315607a2200650
+	./$< -qn 1 bus 0xffffffffffffffff
+	./$< -n 64 brun
 endif # BWSEARCH
 	./$< -v
 endif # QUIET
@@ -332,12 +349,38 @@ endif # ISA
 endif # profile
 
 ifeq ($(SHELL32),false)
-life.exe: life.o req-binutils req-vcbtools
-	ld $(LDFLAGS) life.o $(LDLIBS) -o $@
+
+life.exe: life.o radix-sort.o req-binutils req-vcbtools
+ifeq ($(ISA),native)
+	@# figure out if the native ISA has ADX or not.
+	@if [ $$(gcc -Q --help=target -march=native | grep -F adx | grep -Fq enabled) ]; then \
+		echo "ld $(LDFLAGS) life.o radix-sort.o $(LDLIBS) -o $@"; \
+		ld $(LDFLAGS) life.o radix-sort.o $(LDLIBS) -o $@;        \
+	else                                                          \
+		echo "ld $(LDFLAGS) life.o $(LDLIBS) -o $@";              \
+		ld $(LDFLAGS) life.o $(LDLIBS) -o $@;                     \
+	fi;
 else
-life.exe: init-crt.o life.o req-binutils req-vcbtools
-	ld $(LDFLAGS) init-crt.o life.o $(LDLIBS) -o $@
+	ld $(LDFLAGS) life.o $(LDLIBS) -o $@
+endif # radix sort
+
+else # SHELL32
+
+life.exe: life.o init-crt.o radix-sort.o req-binutils req-vcbtools
+ifeq ($(INCLUDE_RADIX),maybe)
+	@if [ $$(gcc -Q --help=target -march=native | grep -F adx | grep -Fq enabled) ]; then \
+		echo "ld $(LDFLAGS) life.o init-crt.o radix-sort.o $(LDLIBS) -o $@"; \
+		ld $(LDFLAGS) life.o init-crt.o radix-sort.o $(LDLIBS) -o $@;        \
+	else                                                                     \
+		echo "ld $(LDFLAGS) life.o init-crt.o $(LDLIBS) -o $@";              \
+		ld $(LDFLAGS) life.o init-crt.o $(LDLIBS) -o $@;                     \
+	fi;
+else
+	ld $(LDFLAGS) life.o init-crt.o $(LDLIBS) -o $@
+endif # radix sort
+
 endif # SHELL32
+
 
 ifneq ($(RESERVE),long)
 	editbin -nologo -stack:32768,4096 $@

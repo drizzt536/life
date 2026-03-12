@@ -121,14 +121,16 @@ static bool _bws_run_once2(const bool quiet, const Matx8 state) {
 
 	// timestamp is the same format as for the run commands
 
-	printf("\n%03d-%02d:%02d:%02d.%03d | 0x%016zx | %17zu | ",
+	printf("\n%03d-%02d:%02d:%02d.%03d | 0x%016zx | ",
 		tm->tm_yday + 1,              // DAY: 001-366
 		tm->tm_hour,                  // HH: 00-23
 		tm->tm_min,                   // MM
 		tm->tm_sec,                   // SS
 		(int) (ts.tv_nsec / 1000000), // MS
-		state.matx, key
+		state.matx
 	);
+
+	printf("%17zu | ", key);
 
 	print_du64(data.trial);
 	return true;
@@ -142,47 +144,41 @@ static FORCE_INLINE bool _bws_run_once1(const bool quiet) {
 	VA_IF(_bws_run_once2(quiet, state), _bws_run_once1(quiet), state)
 
 static void bws_run(u64 n) {
-	const bool original_quiet = cfg.quiet;
-	cfg.quiet = true;
-
-	while (n --> 0 && bws_run_once(original_quiet));
-
-	cfg.quiet = original_quiet;
+	with (cfg.quiet, true, {
+		while (n --> 0 && bws_run_once(_previous_));
+	});
 }
 
 static void bws_run_forever(void) {
-	const bool original_quiet = cfg.quiet;
-	cfg.quiet = true;
+	with (cfg.quiet, true, {
+		u64 last_reset = (u64) _time64(NULL);
 
-	u64 last_reset = (u64) _time64(NULL);
+		u8 i = 0;
 
-	u8 i = 0;
+		while (bws_run_once(_previous_)) {
+			if (++i != 0 || !cfg.file_out)
+				// only check the timer every 256 trials
+				// and only do the timer in the first place for file output.
+				continue;
 
-	while (bws_run_once(original_quiet)) {
-		if (++i != 0 || !cfg.file_out)
-			// only check the timer every 256 trials
-			// and only do the timer in the first place for file output.
-			continue;
+			const u64 now = (u64) _time64(NULL);
 
-		const u64 now = (u64) _time64(NULL);
+			likely_if (now < last_reset + TIMER_PERIOD)
+				continue;
 
-		likely_if (now < last_reset + TIMER_PERIOD)
-			continue;
+			last_reset = now;
+			give_summary(SUM_RETURN, SUM_BACKWARDS); // returning version of the function. never uses the clipboard
 
-		last_reset = now;
-		give_summary(SUM_RETURN, SUM_BACKWARDS); // returning version of the function. never uses the clipboard
+			memset(data.raw, 0, DATA_SIZE); // clear data.combined and data.trial at once.
 
-		memset(data.raw, 0, DATA_SIZE); // clear data.combined and data.trial at once.
+			free(bws_hist2);
+			init_bws_hist2();
 
-		free(bws_hist2);
-		init_bws_hist2();
+			enputs("More than " TOSTRING_EXPANDED(TIMER_PERIOD)
+				" seconds have passed since timer last check. restarting.");
 
-		enputs("More than " TOSTRING_EXPANDED(TIMER_PERIOD)
-			" seconds have passed since timer last check. restarting.");
-
-		if (unlikely(cfg.bell) && likely(!cfg.silent))
-			putchar('\x07'); // bell
-	}
-
-	cfg.quiet = original_quiet;
+			if (unlikely(cfg.bell) && likely(!cfg.silent))
+				putchar('\x07'); // bell
+		}
+	});
 }

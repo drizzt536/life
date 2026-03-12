@@ -1,4 +1,4 @@
-// compile with `make -B CLIP=true SHELL32=false NEIGHBORHOOD=MOORE RULESET=B3/S23 ISA=adx`
+// compile with `make -B CLIP=true SHELL32=false NEIGHBORHOOD=MOORE RULESET=B3/S23 ISA=adx BENCH=false`
 
 // I do not care that writing to u.x and then reading from u.y is not defined
 // for unions. C just reinterprets the bits as the other type with no change,
@@ -9,13 +9,9 @@
 //       or maybe include the ruleset in the filename?
 // TODO: given a list of states A1, A2, ..., AN, determine if there is a ruleset
 //       under which state A1 => A2, A2 => A3, etc.
-// TODO: consider making a `-n N` flag instead of having separate count and list commands
-//       for everything. this way, `nrun` and `run` can be the same,
-//       and `nsim` and `sim` can be the same, etc.
-// TODO: consider allowing batching with 'tfm'?
-// TODO: allow `tfm S X Y` in addition to `tfm S T` and `tfm S T X Y`.
 // TODO: figure out why -R is slower than -H, and then either remove it or make it not slower.
-// TODO: consider changing burn to brun. or maybe allow both?
+// TODO: implement reading from the pipeline. also figure out what it would be reading.
+//       perhaps a state list?
 
 ///////////////////////////////// config start ////////////////////////////////
 
@@ -202,6 +198,20 @@
 	(x) < 100'000 ? 5 : 6 \
 )
 
+// use _previous_ to access the original value from within the block.
+// the expression returns the temporary value of `thing`.
+// you can use either `with_return;` or `goto _restore_;` to restore the
+// original value and then return
+#define with_return() goto _restore_
+#define with(thing, tmp_val, block) ({    \
+	const __auto_type _previous_ = thing; \
+	thing = tmp_val;                      \
+	block;                                \
+_restore_: (void) &&_restore_;            \
+	thing = _previous_;                   \
+	tmp_val;                              \
+})
+
 // static branch prediction hinting is still used to build prof.exe.
 // NOTE: these default branch probability is 90%
 
@@ -241,11 +251,9 @@
 #include <time.h>        // _localtime64, _timespec64_get, struct _timespec64, struct tm
 #include <sys/stat.h>    // S_IWRITE
 #include <sys/locking.h> // LK_NBLCK
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <fcntl.h> // io.h (_open, _write, ...), O_CREAT, ...
-
 
 // EXIT_SUCCESS == 0
 // EXIT_FAILURE == 1
@@ -265,7 +273,7 @@ static FILE *stdout = NULL, *stderr = NULL;
 #include "errlog.h"
 #include "windows.h"
 #include "matx8.h"
-#include "matx8-next.h"  // Matx8_next
+#include "matx8-next.h" // Matx8_next
 #include "table.h"
 
 // 2d 8-bit point
@@ -273,7 +281,8 @@ typedef struct {
 	u8 x, y;
 } Point8;
 
-typedef enum <% EMPTY, CONST, CYCLE %> sttyp_t; // state type
+typedef enum <% EMPTY, CONST, CYCLE %> sttyp_t;          // state type
+typedef enum { N_UNUSED, N_USED, N_INFINITE } nstatus_t; // `n` status
 
 // hashtable and total_collisions are defined in matx8-table.h now.
 
@@ -305,6 +314,8 @@ static struct {
 	// these pairs are unions so I don't have to make the
 	// struct packed and do extra stuff to make it work
 
+	u64 n;
+
 	union {
 		struct { u32 trial, state; };   // 8 bytes
 		u32 array[2];
@@ -318,17 +329,24 @@ static struct {
 	union {
 		struct { char dead, alive; };   // 2 bytes
 		char array[2];
+		u16 raw;
 	} sim_chars;
 
+	nstatus_t nstatus;
+
 	bool file_out, bell, silent, quiet; // 4 bytes
+
 #if CLIPBOARD
 	bool clip;                          // 1 byte
 #endif
 } cfg = {
+	.n         = 0,
 	.sleep_ms  = {.trial = SLEEP_MS_T_DEF, .state  = SLEEP_MS_S_DEF},
 	.keys      = {.stop  = VK_F1,          .update = VK_INSERT     },
 	.sim_chars = {.alive = ALIVE_CHAR_DEF, .dead   = DEAD_CHAR_DEF },
+	.nstatus    = N_UNUSED,
 };
+
 
 #if HELP
 static const char *const help_string =
@@ -336,6 +354,8 @@ static const char *const help_string =
 	"\nusage: life [FLAGS] COMMAND [OPERANDS]"
 	"\n"
 	"\nflags:"
+	"\n    -n   specify an integer count argument for commands that take it."
+	"\n         'inf' can be given for infinity."
 	"\n    -a   specify a character to print for dead cells in sim modes."
 	"\n    -d   specify a character to print for alive cells in sim modes."
 	"\n    -b   print a bell character when the program exits."
@@ -352,7 +372,7 @@ static const char *const help_string =
 	"\n    -q   quiet mode. suppresses most non-error output messages."
 	"\n    -Q   silent mode. suppresses all terminal output including error messages."
 	"\n    -s   specify a key code to stop in applicable modes"
-	"\n    -u   specify a key code to update the user in `nrun inf`."
+	"\n    -u   specify a key code to update the user in `-n inf frun`."
 	"\n    -S   specify a wait in ms between states in sim modes. default=" TOSTRING_EXPANDED(SLEEP_MS_S_DEF) "."
 	"\n    -T   specify a wait in ms between trials in sim modes. default=" TOSTRING_EXPANDED(SLEEP_MS_T_DEF) "."
 	"\n    -v   print the version string and exit."
@@ -372,35 +392,39 @@ static const char *const help_string =
 	"\n    flags must appear before the command."
 	"\n"
 	"\ncommands:"
-	"\n    help           alias of `-h` flag"
-	"\n    run [S...]     runs simulations on given states and returns data histograms"
-	"\n    nrun [N]       runs N random trials and returns data histograms"
-	"\n    sim [S...]     runs simulations visually on all given states"
-	"\n    nsim [N]       runs N random trials and shows them visually"
-	"\n    sim1 [S]       traverse the given state until the stop key is pressed"
-	"\n    step S... N    step to find the Nth-generation descendent to all given states"
-	"\n                   if only one state is given, N is optional."
+	"\n    help         alias of `-h` flag"
+	"\n    frun [S...]  runs simulations on given states and returns data histograms"
+	"\n                 also runs N Monte-Carlo trials if `-n` is used."
+	"\n    sim [S...]   runs simulations visually on all given states"
+	"\n                 also runs N Monte-Carlo trials if `-n` is used."
+	"\n    sim1 [S]     traverse the given state until the stop key is pressed"
+	"\n    step [S...]  step to find the Nth-generation descendant to all given states."
+	"\n                 N is given through `-n`."
+	"\n    show [S...]  the same as `step`, but forces N=0."
+	"\n    rand         print out random states."
 #if BWSEARCH
-	"\n    bwsr S... N    backwards search to find all Nth-generation ancestors to all given"
-	"\n                   states. If only one state is given, N is optional,"
-	"\n    bwrn [N]       runs N random trials on predecessor searches and count results"
+	"\n    bwsr [S...]  backwards search to find all Nth-generation ancestors to all given"
+	"\n                 states. N is given through `-n`. 'bus' is an alias command"
+	"\n    brun         runs N Monte-Carlo trials on predecessor searches and counts results."
+	"\n                 N is given through `-n`."
 #endif
-	"\n    tfm S T [X Y]  apply a transformation (T) and an optional translation (X, Y)."
-	"\n                   options for T are given below. T happens before X and Y"
+	"\n    tfm S [T] [X Y]  apply an optional transformation (T) and an optional translation"
+	"\n                     (X, Y). options for T are given below. T happens before X and Y."
+#if WRAPPER
 	"\n"
-	"\n    dump           runs `./" PY_BASE ".py -s " DATAFILE "` and exit"
-	"\n    fold           runs `./" PY_BASE ".py -f " DATAFILE "` and exit"
-	"\n    cnt            counts the number of objects in " DATAFILE
-	"\n    merg A B       runs `./" PY_BASE ".py -m A B` and exit"
+	"\n    dump         runs `./" PY_BASE ".py -s " DATAFILE "` and exits"
+	"\n    fold         runs `./" PY_BASE ".py -f " DATAFILE "` and exits"
+	"\n    cnt          counts the number of objects in " DATAFILE
+	"\n    merg A B     runs `./" PY_BASE ".py -m A B` and exits"
+#endif
 	"\n"
 	"\n    N always defaults to 1 if not given."
 	"\n    S defaults to a random state if optional and not given."
-	"\n    run, nrun, sim, and nsim stop traversing when a repeat state is found."
-	"\n    'inf' can be given to nrun"
+	"\n    frun and sim stop traversing when a repeat state is found."
 #if BWSEARCH
-	", nsim, and bwrn"
+	", sim, and brun"
 #else
-	" and nsim"
+	" and sim"
 #endif
 	" to make them run until the stop key is given."
 	"\n"
@@ -551,6 +575,26 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 			operand = argc > 0 ? *argv : NULL;
 
 			switch (fc) {
+			case 'n':
+				unlikely_if (operand == NULL)
+					goto flag_no_operand;
+
+				if (streq(operand, "inf"))
+					// cfg.n can be left as whatever
+					cfg.nstatus = N_INFINITE;
+				else {
+					char *arg_end;
+					const u64 n = strtoull(operand, &arg_end, 0);
+
+					unlikely_if (*arg_end != '\0')
+						goto flag_invalid_operand;
+
+					cfg.n       = n;
+					cfg.nstatus = N_USED;
+				}
+
+				POP_ARG();
+				break;
 			case 'Q':
 				cfg.silent   = true;
 				ERRLOG_LEVEL = ERRLOG_NONE;
@@ -566,6 +610,8 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 				unlikely_if (operand == NULL)
 					goto flag_no_operand;
 
+				_Static_assert(&cfg.sleep_ms.trial == cfg.sleep_ms.array,
+					"the trial sleep time must come first in the structure.");
 				u32 *const pvar = cfg.sleep_ms.array + (fc == 'S');
 
 				char *arg_end;
@@ -583,6 +629,8 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 				unlikely_if (operand == NULL)
 					goto flag_no_operand;
 
+				_Static_assert(&cfg.keys.stop == cfg.keys.array,
+					"the stop key must come first in the structure.");
 				u8 *const pkey = cfg.keys.array + (fc == 'u');
 				// u8 *const pkey = fc == 'u' ? &cfg.keys.update : &cfg.keys.stop;
 
@@ -734,15 +782,15 @@ static FORCE_INLINE bool parse_flags(u32 *const restrict pargc, char **restrict 
 			#if HELP
 				// NOTE: this works because `help_string` starts with `"life v" VERSION`
 				likely_if (!cfg.quiet)
-					printf("%.*s\n", 6 + (i32) __builtin_strlen(VERSION), help_string);
+					printf("%.*s\n", (i32) (__builtin_strlen("life v") + __builtin_strlen(VERSION)), help_string);
 				else likely_if (!cfg.silent)
-					printf("%.*s\n", (i32) __builtin_strlen(VERSION), help_string + 6);
+					printf("%.*s\n", (i32) __builtin_strlen(VERSION), help_string + __builtin_strlen("life v"));
 			#else
 				// store a separate string from the help text.
 				likely_if (!cfg.quiet)
 					puts("life v" VERSION);
 				else likely_if (!cfg.silent)
-					puts("life v" VERSION + 6);
+					puts("life v" VERSION + __builtin_strlen("life v"));
 			#endif
 				exit(EXIT_SUCCESS);
 			default:
@@ -897,8 +945,6 @@ void mainCRTStartup(void)
 	unlikely_if (argv[0][3] && argv[0][4])
 		goto unknown_command;
 
-	u64 n; // more than one branch use a generic u64 variable
-
 	if (argc == 0)
 		__builtin_unreachable();
 
@@ -907,63 +953,41 @@ void mainCRTStartup(void)
 	// NOTE: this is safe because the string is at least 3 characters long,
 	//       so it takes up at least 4 bytes including the null terminator.
 	switch (*(u32 *) *argv) {
-	case _4CHARS_TO_U32('n', 'r', 'u', 'n'):
+	case _4CHARS_TO_U32('f', 'r', 'u', 'n'):
 		print_table_headers();
 
-		likely_if (argc == 2) {
-			likely_if (streq(argv[1], "inf")) {
-				run_forever();
-				give_summary(SUM_NO_RETURN);
-				__builtin_unreachable();
+		// parse states
+		for (u32 i = 1; i < argc; i++) {
+			unlikely_if (cfg.silent)
+				run_once(Matx8_tryparse(argv, "frun", i));
+			else {
+				putchar('\n');
+				Matx8 state = Matx8_tryparse(argv, "frun", i);
+				printf("\e[A");
+				run_once(state);
 			}
-
-			n = Matx8_tryparse(argv, "run", 1).matx;
-		}
-		else likely_if (argc == 1)
-			n = 1;
-		else {
-			eprintf("command `%s` expected %s operands, found %u.\n", "nrun", "0 or 1", argc - 1);
-			exit(EXIT_CMD_INVOP);
 		}
 
-		for (u8 i = 0; i < (n & 7); i++)
+		// execute the numeric part
+		likely_if (cfg.nstatus == N_INFINITE) {
+			run_forever();
+			give_summary(SUM_NO_RETURN);
+			__builtin_unreachable();
+		}
+
+		if (cfg.nstatus == N_UNUSED && argc == 1)
+			// if `-n X` isn't passed and also no states were passed, default to 1 trial
+			cfg.n = 1;
+
+		for (u8 i = 0; i < (cfg.n & 7); i++)
 			run_once();
 
-		for (u64 i = n >> 3; i --> 0 ;)
+		for (u64 i = cfg.n >> 3; i --> 0 ;)
 			RUN_8();
 
 		give_summary(SUM_NO_RETURN);
 		__builtin_unreachable();
-	case _4CHARS_TO_U32('r', 'u', 'n',  0 ):
-		print_table_headers();
-
-		unlikely_if (argc == 1)
-			run_once();
-		else
-			// run once for each state given
-			for (u32 i = 1; i < argc; i++) {
-				unlikely_if (cfg.silent)
-					run_once(Matx8_tryparse(argv, "run", i));
-				else {
-					putchar('\n');
-					Matx8 state = Matx8_tryparse(argv, "run", i);
-					printf("\e[A");
-					run_once(state);
-				}
-			}
-
-		give_summary(SUM_NO_RETURN);
-		__builtin_unreachable();
-	case _4CHARS_TO_U32('s', 'i', 'm',  0 ):
-		unlikely_if (argc == 1) {
-			cli_sim(1);
-		#if DEBUG
-			if (!cfg.quiet)
-				putchar('\n');
-		#endif
-			exit(EXIT_SUCCESS);
-		}
-
+	case _4CHARS_TO_U32('s', 'i', 'm', 0 ):
 		// run once for each state given
 		for (u32 i = 1; i < argc; i++) {
 			cli_sim(i, Matx8_tryparse(argv, "sim", i));
@@ -973,10 +997,37 @@ void mainCRTStartup(void)
 				Sleep(cfg.sleep_ms.trial);
 		}
 
+		if (cfg.nstatus == N_INFINITE) {
+			u64 trial = 1;
+
+			while (true) {
+				cli_sim(trial++);
+				Sleep(cfg.sleep_ms.trial);
+			}
+
+			__builtin_unreachable();
+		}
+
+		if (cfg.nstatus == N_UNUSED && argc == 1)
+			// if `-n X` isn't passed and also no states were passed, default to 1 trial
+			cfg.n = 1;
+
+
+		for (u64 i = 1; i < cfg.n; i++) {
+			cli_sim(i);
+			Sleep(cfg.sleep_ms.trial);
+		}
+
+		// do the last simulation without a sleep after it.
+		if (cfg.n != 0)
+			cli_sim(cfg.n);
+
 		#if DEBUG
+		// print the collisions data on its own line
 		if (!cfg.quiet)
 			putchar('\n');
 		#endif
+
 		break;
 	case _4CHARS_TO_U32('s', 'i', 'm', '1'):
 		if (argc == 1) {
@@ -992,57 +1043,26 @@ void mainCRTStartup(void)
 		// argc == 2
 		cli_sim_one(Matx8_tryparse(argv, "sim1", 1));
 		break;
-	case _4CHARS_TO_U32('n', 's', 'i', 'm'):
-		likely_if (argc == 2) {
-			likely_if (streq(argv[1], "inf")) {
-				u64 trial = 1;
+	case _4CHARS_TO_U32('s', 'h', 'o', 'w'):
+		cfg.nstatus = N_USED;
+		cfg.n       = 0;
 
-				while (true) {
-					cli_sim(trial++);
-					Sleep(cfg.sleep_ms.trial);
-				}
-
-				__builtin_unreachable();
-			}
-
-			n = Matx8_tryparse(argv, "nsim", 1).matx;
-		}
-		else likely_if (argc == 1)
-			n = 1; // default to one trial.
-		else {
-			eprintf("command `%s` expected %s operands, found %u.\n", "nsim", "0 or 1", argc - 1);
-			exit(EXIT_CMD_INVOP);
-		}
-
-		unlikely_if (n == 0)
-			exit(EXIT_SUCCESS);
-
-		for (u64 i = 1; i < n; i++) {
-			cli_sim(i);
-			Sleep(cfg.sleep_ms.trial);
-		}
-
-		// do the last simulation without a sleep after it.
-		cli_sim(n);
-
-		#if DEBUG
-		if (!cfg.quiet)
-			putchar('\n');
-		#endif
-		break;
+		// this is basically a branch fallthrough
+		goto step_start_doing_stuff;
 	case _4CHARS_TO_U32('s', 't', 'e', 'p'): {
-		unlikely_if (argc < 2) {
-			eprintf("command `%s` expected %s operands, found %u.\n", "step", "1 or more", argc - 1);
-			exit(EXIT_CMD_INVOP);
-		}
+		if (cfg.nstatus == N_UNUSED)
+			// default to 1 step of not given.
+			cfg.n = 1;
+		else if (cfg.nstatus == N_INFINITE)
+			// this has to be set here so it goes into the modulo branch.
+			cfg.n = ~0llu;
 
-		n = argc == 2 ? 1 : Matx8_tryparse(argv, "step", argc - 1).matx;
+	step_start_doing_stuff:
+		if (--argc == 0)
+			break;
 
-	#pragma GCC diagnostic push
-	#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-		// the compiler doesn't realize that fd is only used after it is initialized,
-		// because cfg.file_out doesn't change between the two points.
-		argc -= 1 + (argc > 2);
+		// argc is now the amount of states given
+
 		u32 fd;
 
 		if (cfg.file_out) {
@@ -1067,15 +1087,18 @@ void mainCRTStartup(void)
 		for (u32 si = 1; si <= argc; si++) {
 			Matx8 state = Matx8_tryparse(argv, "step", si);
 			Matx8 orig_state = state;
-			u64 k = n; // local value of n.
+			u64 n = cfg.n; // local value of n.
+			u32 p;
 
-			unlikely_if (n >= STEP_MOD_THRESH) {
-				const bool original_quiet = cfg.quiet;
-				cfg.quiet = true;
-				run_once(state);
-				cfg.quiet = original_quiet;
+			unlikely_if (cfg.n >= STEP_MOD_THRESH) {
+				{
+					const bool original_quiet = cfg.quiet;
+					cfg.quiet = true;
+					run_once(state);
+					cfg.quiet = original_quiet;
+				}
 
-				u32 p, t;
+				u32 t;
 
 				for (p = 0; data.periods[p] == 0; p++)
 					if (p >= PERIOD_MAX)
@@ -1085,23 +1108,40 @@ void mainCRTStartup(void)
 					if (t >= TRANSIENT_MAX)
 						__builtin_unreachable();
 
-				k -= t;
-				t -= p;
-				k %= p;
+				// these could also be decrements, which would be ever so slightly slower,
+				// but would have smaller opcodes. I think this is better for this case.
+				data.periods[p]    = 0;
+				data.transients[t] = 0;
+
+				unlikelyp_if (cfg.nstatus == N_INFINITE && p != 1, 0.9999999)
+					goto step_handle_indeterminate;
+
+				n -= t; // subtract the steps already made
+				t -= p; // don't iterate the period part. (not required)
+				n %= p; // modulo the remaining count by the period
 
 				// iterate until it gets to the start of the loop
 				while (t --> 0)
 					state = Matx8_next(state);
 			}
 
-			while (k --> 0)
+			while (n --> 0)
 				state = Matx8_next(state);
 
+			// the compiler doesn't realize that fd is only used after it is initialized
+			// because cfg.file_out doesn't change between the two points.
+
+			// like it is `if (condition) fd = whatever;`
+			// then `if (condition) do_stuff(fd);` with the same condition.
+			// fuckass retarded compiler
+			#pragma GCC diagnostic push
+			#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 			if (cfg.file_out) _write(
 				fd,
 				hashtable.scratch,
 				sprintf(hashtable.scratch, "0x%016zx => 0x%016zx\n" + 12, state.matx)
 			);
+			#pragma GCC diagnostic pop
 
 			if (!cfg.quiet)
 				printf("0x%016zx => 0x%016zx\n", orig_state.matx, state.matx);
@@ -1115,62 +1155,120 @@ void mainCRTStartup(void)
 				if (si < argc)
 					putchar('\n');
 			}
+
+			continue;
+
+		step_handle_indeterminate:
+			#pragma GCC diagnostic push
+			#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+			if (cfg.file_out) _write(fd, "0x%016zx => @__indeterminate__\n" + 12, 19);
+			#pragma GCC diagnostic pop
+
+			if (!cfg.quiet)
+				printf("0x%016zx => @__indeterminate__\n", orig_state.matx);
+			else likely_if (!cfg.silent)
+				printf("0x%016zx => @__indeterminate__\n" + 12);
+
+			if (!cfg.quiet) {
+				// figure out which cells are constant and which ones are
+				// actually indeterminate.
+
+				Matx8 diff_mask = {0}, next_state;
+				for (u32 i = 0; i < p; i++) {
+					next_state = Matx8_next(state);
+					diff_mask.matx |= state.matx ^ next_state.matx;
+
+					state = next_state;
+				}
+
+				print_state(state, diff_mask);
+				putchar('\n');
+
+				if (si < argc)
+					putchar('\n');
+			}
 		} // for
 
-	#pragma GCC diagnostic pop
-
-		#if DEBUG
-			total_collisions = 0;
-		#endif
+	#if DEBUG
+		// stop it from printing the collision count at the end.
+		// that information is only useful for `run` and `nrun` modes.
+		total_collisions = 0;
+	#endif
 
 		// the OS will unlock and close the file itself
 		break;
 	}
+	case _4CHARS_TO_U32('r', 'a', 'n', 'd'):
+		if (cfg.nstatus == N_UNUSED && argc == 1)
+			cfg.n = 1;
+
+		if (cfg.nstatus == N_INFINITE) {
+			while (true) {
+				const Matx8 state = Matx8_random();
+				if (!cfg.silent)
+					printf("0x%016zx => 0x%016zx\n" + 12, state.matx);
+
+				if (!cfg.quiet) {
+					print_state(state);
+					putchar('\n');
+					putchar('\n');
+				}
+			}
+
+			__builtin_unreachable();
+		}
+
+		while (cfg.n --> 0) {
+			const Matx8 state = Matx8_random();
+			if (!cfg.silent)
+				printf("0x%016zx => 0x%016zx\n" + 12, state.matx);
+
+			if (!cfg.quiet) {
+				print_state(state);
+				putchar('\n');
+
+				if (cfg.n != 0)
+					putchar('\n');
+			}
+		}
+		break;
 #if BWSEARCH
 	case _4CHARS_TO_U32('b', 'u', 's',  0 ): FALLTHROUGH;
 	case _4CHARS_TO_U32('b', 'w', 's', 'r'): {
 		// backwards search
-		unlikely_if (argc < 2) {
-			eprintf("command `%s` expected %s operands, found %u.\n", "bwsr", "1 or more", argc - 1);
-			exit(EXIT_CMD_INVOP);
-		}
+
+		if (cfg.nstatus == N_INFINITE)
+			// I don't want to implement the infinite one, and this will take like a hundred billion years
+			// to finish, so this might as well be infinite. Also, some states will go into cycles, and I
+			// don't really have a good way of storing that information without taking up an exponential
+			// amount of memory with respect to n. I would have to store the list of states with each
+			// depth, and iterate through it at each depth, checking for matching values against every
+			// single previous depth, and that would be insanely slow and cause OOM crashes quite quickly.
+			cfg.n = ~0llu;
+		else if (cfg.nstatus == N_UNUSED)
+			cfg.n = 1;
 
 		StateBuffer *pdlist;
+
+		if (--argc == 0) // set to the number of arguments to the command.
+			// if no values are given, do nothing.
+			break;
 
 		_Static_assert(sizeof(StateBuffer) == 1*sizeof(u64),
 			"state buffer should only have a `size` attribute");
 
-		if (argc == 2) {
-			// the step count argument is optional if there is only one state
-			Matx8 state = Matx8_tryparse(argv, "bwsr", 1);
-			n = 1;
+		pdlist = (StateBuffer *) malloc(sizeof(StateBuffer) + argc*sizeof(Matx8));
+		pdlist->size = argc;
 
-			// predecessor list
-			pdlist = (StateBuffer *) malloc(sizeof(StateBuffer) + sizeof(Matx8));
+		for (u32 i = 0; i < argc; i++)
+			pdlist->states[i] = Matx8_tryparse(argv, "bwsr", i + 1);
 
-			pdlist->size      = 1; // 1 state
-			pdlist->states[0] = state;
-		}
-		else {
-			n = Matx8_tryparse(argv, "bwsr", argc - 1).matx;
-
-			// the step count is the last argument.
-			pdlist = (StateBuffer *) malloc(sizeof(StateBuffer) + (argc - 2)*sizeof(Matx8));
-
-			// cast away the const for initialization
-			pdlist->size = argc - 2;
-
-			for (u32 i = 1; i <= argc - 2; i++)
-				pdlist->states[i - 1] = Matx8_tryparse(argv, "bwsr", i);
-		}
-
-		for (; n > 0 && pdlist->size > 0; n--) {
+		for (; cfg.n > 0 && pdlist->size > 0; cfg.n--) {
 			if (!cfg.quiet)
-				printf("%zu step%s remaining\n", n, "s" + (n == 1));
+				printf("%zu step%s remaining\n", cfg.n, "s" + (cfg.n == 1));
 
 			pdlist = (StateBuffer *) find_predecessors((const StateBuffer *) pdlist);
 		}
-
 
 		if (cfg.file_out) {
 			const u32 fd = _open(OUTFILE, O_CREAT | O_WRONLY | O_BINARY, S_IWRITE);
@@ -1192,10 +1290,11 @@ void mainCRTStartup(void)
 
 			*(u16 *) hashtable.scratch = _2CHARS_TO_U16('0', 'x');
 
-			for (u64 i = 0; i < pdlist->size; i++) {
-				sprintf(hashtable.scratch + 2, "0x%016zx => 0x%016zx\n" + 14, pdlist->states[i].matx);
-				_write(fd, hashtable.scratch, 2 + 16 + 1);
-			}
+			for (u64 i = 0; i < pdlist->size; i++) _write(
+				fd,
+				hashtable.scratch,
+				2 + sprintf(hashtable.scratch + 2, "0x%016zx => 0x%016zx\n" + 12 + 2, pdlist->states[i].matx)
+			);
 		}
 
 		likely_if (!cfg.silent)
@@ -1204,17 +1303,19 @@ void mainCRTStartup(void)
 
 		break;
 	}
-	case _4CHARS_TO_U32('b', 'u', 'r', 'n'): FALLTHROUGH;
-	case _4CHARS_TO_U32('b', 'w', 'r', 'n'):
+	case _4CHARS_TO_U32('b', 'r', 'u', 'n'):
 		// backwards run
 		init_bws_hist2();
 
-		unlikely_if (argc > 2) {
-			eprintf("command `%s` expected %s operands, found %u.\n", "bwrn", "0 or 1", argc - 1);
+		// TODO: also accept states for brun, as well as the numbers. currently, I don't think the
+		//       bws-run module allows for this, just based on how the functions are implemented.
+
+		unlikely_if (argc > 1) {
+			eprintf("command `%s` expected %s operands, found %u.\n", "brun", "0", argc - 1);
 			exit(EXIT_CMD_INVOP);
 		}
 
-		if (!cfg.quiet)
+		likely_if (!cfg.quiet)
 			// don't worry about overflowing the table.
 			// very few states have more than 10^17 predecessors.
 			printf(
@@ -1222,41 +1323,52 @@ void mainCRTStartup(void)
 				"------------------------------------------------------------------"
 			);
 
-		if (argc == 1)
-			bws_run(1);
-		else if (streq(argv[1], "inf"))
+		if (cfg.nstatus == N_INFINITE)
 			bws_run_forever();
+		else likely_if (cfg.nstatus == N_USED)
+			bws_run(cfg.n);
 		else
-			bws_run(Matx8_tryparse(argv, "bwrn", 1).matx);
+			bws_run(1);
 
 		give_summary(SUM_NO_RETURN, SUM_BACKWARDS);
 		__builtin_unreachable();
 #endif
 	case _4CHARS_TO_U32('t', 'f', 'm',  0 ): {
-		unlikely_if (argc != 3 && argc != 5) {
-			eprintf("command `%s` expected %s operands, found %u.\n", "tfm", "2 or 4", argc - 1);
+		unlikely_if (argc < 2 && argc > 5) {
+			eprintf("command `%s` expected %s operands, found %u.\n", "tfm", "1-4", argc - 1);
 			exit(EXIT_CMD_INVOP);
 		}
 
-		Matx8 state   = Matx8_tryparse(argv, "tfm", 1);
-		const u64 tfm = Matx8_tryparse(argv, "tfm", 2).matx;
+		Matx8 state = Matx8_tryparse(argv, "tfm", 1);
+		u64 tfm = 0;
+		Point8 roll = {0};
+
+		/*if (argc == 2) {
+			// [0=cmd 1=state]
+			// nothing
+		}
+		else */
+		if (argc == 3) {
+			// [0=cmd 1=state 2=tfm]
+			tfm = Matx8_tryparse(argv, "tfm", 2).matx;
+		}
+		else if (argc == 4) {
+			// [0=cmd 1=state 2=xroll 3=yroll]
+			roll.x = Matx8_tryparse(argv, "tfm", 2).rows[0];
+			roll.y = Matx8_tryparse(argv, "tfm", 3).rows[0];
+		}
+		else if (argc == 5) {
+			// [0=cmd 1=state 2=tfm   3=xroll 4=yroll]
+			tfm   = Matx8_tryparse(argv, "tfm", 2).matx;
+			roll.x = Matx8_tryparse(argv, "tfm", 3).rows[0];
+			roll.y = Matx8_tryparse(argv, "tfm", 4).rows[0];
+		}
 
 		unlikely_if (tfm >= sizeof(tfm_strs) / sizeof(*tfm_strs))
 			cmd_invalid_operand("tfm", 2);
 
-		Point8 roll;
-
-		if (argc == 3)
-			roll = (Point8) {0};
-		else {
-			u64 tmp = Matx8_tryparse(argv, "tfm", 3).matx;
-			unlikely_if (tmp > 7) cmd_invalid_operand("tfm", 3);
-			roll.x = tmp;
-
-			tmp = Matx8_tryparse(argv, "tfm", 4).matx;
-			unlikely_if (tmp > 7) cmd_invalid_operand("tfm", 4);
-			roll.y = tmp;
-		}
+		unlikely_if (roll.x > 7) cmd_invalid_operand("tfm", 2 + (argc == 5));
+		unlikely_if (roll.y > 7) cmd_invalid_operand("tfm", 3 + (argc == 5));
 
 		state = Matx8_tfm(state, tfm);
 		state = Matx8_xroll(state, roll.x);

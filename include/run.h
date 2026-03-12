@@ -92,14 +92,16 @@ static void log_if_interesting(Matx8 s0, Matx8 s1, sttyp_t type, u32 step, u32 p
 	**/
 
 	// this will just print `365-17:00:00.000` every time in profiling mode.
-	printf("\n%03d-%02d:%02d:%02d.%03d | 0x%016zx | %3u | ",
+	printf("\n%03d-%02d:%02d:%02d.%03d | 0x%016zx | ",
 		tm->tm_yday + 1,              // DAY: 001-366
 		tm->tm_hour,                  // HH: 00-23
 		tm->tm_min,                   // MM
 		tm->tm_sec,                   // SS
 		(int) (ts.tv_nsec / 1000000), // MS
-		s0.matx, interest
+		s0.matx
 	);
+
+	printf("%3u | ", interest);
 
 	// pick the alignment based on the length of the max value, up to 6 digits.
 	unlikely_if (interest & (2 | 16))

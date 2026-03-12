@@ -10,7 +10,7 @@ static FORCE_INLINE char *_stringify_count(const sttyp_t t) {
 	}
 }
 
-static void print_state(const Matx8 state) {
+static void _print_state1(const Matx8 state) {
 	// returns the number of characters printed (always 202)
 	// represents alive cells as '#' and dead cells as '.'
 
@@ -34,6 +34,32 @@ static void print_state(const Matx8 state) {
 			putchar('\n');
 	}
 }
+
+static void _print_state2(const Matx8 state, const Matx8 imask) {
+	// imask is the indeterminate value mask
+
+	puts(
+		"   | 7 6 5 4 3 2 1 0 \n"
+		"---+-----------------"
+	);
+
+	for (u8 row = 8; row --> 0 ;) {
+		printf(" %u |", row);
+
+		for (u8 col = 8; col --> 0 ;) {
+			putchar(' ');
+			putchar(
+				(imask.rows[row] >> col) & 1 ? '?' :
+				(state.rows[row] >> col) & 1 ? cfg.sim_chars.alive : cfg.sim_chars.dead);
+		}
+
+		unlikelyp_if (row, 0.875)
+			putchar('\n');
+	}
+}
+
+#define print_state(state, imask...) \
+	VA_IF(_print_state2(state, imask), _print_state1(state), imask)
 
 static void _cli_sim2(const u64 trial, const Matx8 start_state) {
 	u32 step, h, table_value, period;

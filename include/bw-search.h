@@ -67,6 +67,15 @@ static FORCE_INLINE u16 spread8(const u8 x) {
 
 // NOTE: `size` never includes the metadata.
 
+#if __ADX__
+// this implementation of radix sort uses `shrx`, so it requires ADX to work.
+u64 *radix_sort_u64(const u64 *arr, u64 size);
+
+static FORCE_INLINE void sort(u64 *const arr, const u64 size) {
+	radix_sort_u64(arr, size);
+}
+#else
+// fall back to introsort if ADX is not available
 static void _heapify(u64 *arr, i64 n, i64 i) {
 	i64 largest = i;
 
@@ -90,8 +99,7 @@ static void _heapify(u64 *arr, i64 n, i64 i) {
 	}
 }
 
-static void _sort(u64 *arr, i64 high, u64 depth, u64 depth_max) {
-	// introsort
+static void _introsort(u64 *arr, i64 high, u64 depth, u64 depth_max) {
 	while (high > 0) {
 		if (high <= 24) {
 			for (i64 step = 1; step <= high; step++) {
@@ -172,14 +180,14 @@ static void _sort(u64 *arr, i64 high, u64 depth, u64 depth_max) {
 		depth++;
 		// recurse on the shorter one
 		if (pi < (high >> 1)) {
-			_sort(arr, pi - 1, depth, depth_max);
+			_introsort(arr, pi - 1, depth, depth_max);
 
 			// _sort(arr + (pi + 1), high - (pi + 1), depth, depth_max);
 			arr  += pi + 1;
 			high -= pi + 1;
 		}
 		else {
-			_sort(arr + (pi + 1), high - (pi + 1), depth, depth_max);
+			_introsort(arr + (pi + 1), high - (pi + 1), depth, depth_max);
 
 			// _sort(arr, pi - 1, depth, depth_max);
 			high = pi - 1;
@@ -188,8 +196,9 @@ static void _sort(u64 *arr, i64 high, u64 depth, u64 depth_max) {
 }
 
 static FORCE_INLINE void sort(u64 *const arr, const u64 size) {
-	_sort(arr, (u64) (size - 1), 0, (63 - __builtin_clzll(size)) << 1);
+	_introsort(arr, (u64) (size - 1), 0, (63 - __builtin_clzll(size)) << 1);
 }
+#endif
 
 static u64 uniq(Matx8 *const arr, const u64 size) {
 	// deduplication in O(n log n) time
@@ -230,16 +239,11 @@ static Matx8 *_gen_combos(Matx8 *restrict out, Matx8 *restrict arr, Matx8 center
 
 	u8 indices[8] = {0, 1, 2, 3, 4, 5, 6, 7};
 
+	_Static_assert(__max(ALIVE_PRED_COUNT(), DEAD_PRED_COUNT()) * sizeof(u64) <= SCRATCH_SIZE,
+		"the scratch buffer must be large enough to hold all predecessors for any given bit.");
+
 	while (true) {
 		// combine the states together and output the state
-		// TODO: make this a compile-time check based on something like
-		//       max(ALIVE_PRED_COUNT(), DEAD_PRED_COUNT()) * sizeof(u64)
-		if ((u64) (out - (Matx8 *) hashtable.scratch) >= SCRATCH_SIZE / sizeof(u64)) {
-			// this shouldn't happen unless the hash table is tuned to be too small.
-			// there shouldn't be more than a few hundred items.
-			eputs("scratch buffer overflow: too many combos.");
-			exit(EXIT_OOM);
-		}
 
 		// add the partial state to the output list
 		{
@@ -513,6 +517,10 @@ static const StateBuffer *_find_predecessors2mb(Matx8 state, const bool check_ke
 	} // if (1's better or 0's better)
 
 	u8 bit_idx = 0;
+
+	// NOTE: this checks keypresses after every advancement in case it is a state like 0,
+	//       where it takes like 30 minutes to run and then overflows RAM.
+	//
 
 	// form as many 2x2 boxes as possible as early as possible (reduce the search space)
 	for (u8 i = 0; i < 8; i++) {

@@ -1213,6 +1213,9 @@ void mainCRTStartup(void)
 					putchar('\n');
 					putchar('\n');
 				}
+
+				if (keypressed(cfg.keys.stop))
+					exit(0);
 			}
 
 			__builtin_unreachable();

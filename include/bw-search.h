@@ -4,8 +4,8 @@
 // backwards search
 
 #ifndef B_TT
-	#pragma message("B_TT not defined. assuming B2")
-	#define B_TT 0b000000100u
+	#pragma message("B_TT not defined. assuming B3")
+	#define B_TT 0b000001000u
 #endif
 
 #ifndef S_TT
@@ -68,7 +68,9 @@ static FORCE_INLINE u16 spread8(const u8 x) {
 // NOTE: `size` never includes the metadata.
 
 #if __ADX__
-// this implementation of radix sort uses `shrx`, so it requires ADX to work.
+// this implementation of radix sort uses `shrx`, so it requires ISA=ADX to work.
+// technically it only uses BMI2, but the compilation logic is easier to pretend it requires ADX.
+// ISA=ADX is the best choice anyway, performance wise
 u64 *radix_sort_u64(const u64 *arr, u64 size);
 
 static FORCE_INLINE void sort(u64 *const arr, const u64 size) {

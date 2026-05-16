@@ -6,7 +6,7 @@ section .text
 	extern Sleep		; kernel32.dll
 
 ;; in .text instead of .rdata to save space in the binary.
-cmd: db "life -fH burn inf", 0
+cmd: db "life -fH brun inf", 0
 msg: db "ctrl+C to exit"   , 0
 
 mainCRTStartup:

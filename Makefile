@@ -5,7 +5,7 @@
 	# VC build tools: dumpbin, editbin (optional)
 	# misc: 7z, wmic, nasm, python (>=3.12)
 
-# this works for sure with MinGW devkit 2.5 (GCC 15.2, binutils 2.45)
+# this works for sure with MinGW devkit 2.5-2.7 (GCC 15.2, binutils 2.45-2.46)
 # the MSYS2 version of GCC won't work because it is UCRT and not MSVCRT.
 
 VERSION := 3.0.0

@@ -210,12 +210,10 @@ static char *bws_sprintf_summary(char *buf) {
 	for (u64 i = 0; i < bws_hist2->size; i++) {
 		const u64 key = bws_hist2->list[i].key;
 
-		if (data.combined[i] != 0) {
-			BUF_WRITE(buf, "\"%zu\": %zu", key, bws_hist2->list[i].cnt);
+		BUF_WRITE(buf, "\"%zu\": %zu", key, bws_hist2->list[i].cnt);
 
-			if (key != max_key)
-				BUF_WRITE(buf, ',', ' ');
-		}
+		if (key != max_key)
+			BUF_WRITE(buf, ',', ' ');
 	}
 
 	BUF_WRITE(buf, '}', '\n', '}', '\0');

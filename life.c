@@ -200,7 +200,7 @@
 
 // use _previous_ to access the original value from within the block.
 // the expression returns the temporary value of `thing`.
-// you can use either `with_return;` or `goto _restore_;` to restore the
+// use either `with_return;` or `goto _restore_;` to restore the
 // original value and then return
 #define with_return() goto _restore_
 #define with(thing, tmp_val, block) ({    \
@@ -1134,6 +1134,7 @@ void mainCRTStartup(void)
 			// like it is `if (condition) fd = whatever;`
 			// then `if (condition) do_stuff(fd);` with the same condition.
 			// fuckass retarded compiler
+			// NOTE: this is as of GCC 15.2. idk if it is different in newer or older versions.
 			#pragma GCC diagnostic push
 			#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 			if (cfg.file_out) _write(
@@ -1343,8 +1344,8 @@ void mainCRTStartup(void)
 		}
 
 		Matx8 state = Matx8_tryparse(argv, "tfm", 1);
-		u64 tfm = 0;
-		Point8 roll = {0};
+		u64 tfm     = 0;
+		Point8 roll = {};
 
 		/*if (argc == 2) {
 			// [0=cmd 1=state]
@@ -1361,8 +1362,8 @@ void mainCRTStartup(void)
 			roll.y = Matx8_tryparse(argv, "tfm", 3).rows[0];
 		}
 		else if (argc == 5) {
-			// [0=cmd 1=state 2=tfm   3=xroll 4=yroll]
-			tfm   = Matx8_tryparse(argv, "tfm", 2).matx;
+			// [0=cmd 1=state 2=tfm 3=xroll 4=yroll]
+			tfm    = Matx8_tryparse(argv, "tfm", 2).matx;
 			roll.x = Matx8_tryparse(argv, "tfm", 3).rows[0];
 			roll.y = Matx8_tryparse(argv, "tfm", 4).rows[0];
 		}
@@ -1400,7 +1401,7 @@ void mainCRTStartup(void)
 			exit(EXIT_CMD_INVOP);
 		}
 
-		// I don't want a DLL import for strnlen just for this.
+		// I don't want a DLL import for strlen or strnlen just for this.
 		// limit paths to 255 characters.
 		for (u8 i, j = 1; j < 3; j++) {
 			for (i = 0; i < UINT8_MAX && argv[j][i] != '\0'; i++);
@@ -1440,11 +1441,11 @@ void mainCRTStartup(void)
 		i32 len;
 		char *const restrict buf = hashtable.scratch;
 
-		// NOTE: it doesn't make sense for a file to end with "\n{\n\t".
-		//       without at least like 20 or so extra characters.
-		_Static_assert(SCRATCH_SIZE > 15, "SCRATCH_SIZE should be at least like 16.");
+		_Static_assert(SCRATCH_SIZE > 255, "SCRATCH_SIZE should be at least like 256.");
 
-		while ((len = _read(fd, buf, SCRATCH_SIZE)) > 8) {
+		// NOTE: The minimum object size is like 190 bytes as of v3.0.0, so if the remaining
+		//       data is less than 128, there definitely is not a remaining object.
+		while ((len = _read(fd, buf, SCRATCH_SIZE)) > 127) {
 			i32 i = 0;
 
 			switch (tmp_len) {

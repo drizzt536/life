@@ -1,14 +1,14 @@
 # the following things are required:
 	# basic linux tools: mv, rm, sed, awk, stat, grep, tail, touch
-	# other linux tools: gcc  (>=13, must be MSVCRT), make
+	# other linux tools: gcc (>=13, must be MSVCRT), make
 	# binutils: ld, strip, objcopy, objdump
 	# VC build tools: dumpbin, editbin (optional)
 	# misc: 7z, wmic, nasm, python (>=3.12)
 
-# this works for sure with MinGW devkit 2.5-2.7 (GCC 15.2, binutils 2.45-2.46)
+# this works for sure with MinGW devkit 2.5-2.8 (GCC 15.2-16.1, binutils 2.45-2.46)
 # the MSYS2 version of GCC won't work because it is UCRT and not MSVCRT.
 
-VERSION := 3.0.0
+VERSION := 3.1.0
 
 CFLAGS      := -Werror -Wall -Wextra -Wno-parentheses -Wno-missing-profile -std=gnu23 \
 			-Iinclude -masm=intel -DPY_BASE=\"analyze\" -DVERSION=\"$(VERSION)\"
@@ -191,6 +191,9 @@ req-gcc: req-linux req-binutils
 	@if ! command -v gcc > /dev/null; then echo "# program not found: \`gcc\`";  exit 1; fi; \
 	if ! command -v grep > /dev/null; then echo "# program not found: \`grep\`"; exit 1; fi
 
+ifneq ($(SKIP_GCC_CHECK),true)
+	@# Sometimes the fuckass antivirus things the empty program is malware
+	@# if you know it is MSVCRT, then you can just skip the check.
 	echo "void main() {}" | gcc -x c -Wl,-s,--gc-sections - -o tmp.exe
 	@if ! grep -Fq msvcrt.dll tmp.exe; then     \
 		echo "rm -f tmp.exe";                   \
@@ -199,6 +202,7 @@ req-gcc: req-linux req-binutils
 		exit 2;                                 \
 	fi
 	rm -f tmp.exe
+endif
 	# suitable version of GCC found
 
 req-linux:
@@ -294,10 +298,10 @@ else # PROFILE
 prof.exe: init-crt.o radix-sort.o $(CFILES) ruleset.tmp req-gcc
 ifeq ($(ISA),native)
 	truth_table=$(TRUTH_TABLE_CMD); \
-	if [ $$(gcc -Q --help=target -march=native | grep -F adx | grep -Fq enabled) ]; then \
-		gcc $(PROF_CFLAGS) $(CFLAGS) $$truth_table $(COPTZ) $< life.c -o $@
-	else                                                                     \
-		gcc $(PROF_CFLAGS) $(CFLAGS) $$truth_table $(COPTZ) $< radix-sort.o life.c -o $@
+	if gcc -Q --help=target -march=native | grep -F adx | grep -Fq enabled; then          \
+		gcc $(PROF_CFLAGS) $(CFLAGS) $$truth_table $(COPTZ) $< radix-sort.o life.c -o $@; \
+	else                                                                                  \
+		gcc $(PROF_CFLAGS) $(CFLAGS) $$truth_table $(COPTZ) $< life.c -o $@;              \
 	fi;
 else
 	truth_table=$(TRUTH_TABLE_CMD); \
@@ -353,7 +357,7 @@ ifeq ($(SHELL32),false)
 life.exe: life.o radix-sort.o req-binutils req-vcbtools
 ifeq ($(ISA),native)
 	@# figure out if the native ISA has ADX or not.
-	@if [ $$(gcc -Q --help=target -march=native | grep -F adx | grep -Fq enabled) ]; then \
+	@if gcc -Q --help=target -march=native | grep -F adx | grep -Fq enabled; then \
 		echo "ld $(LDFLAGS) life.o radix-sort.o $(LDLIBS) -o $@"; \
 		ld $(LDFLAGS) life.o radix-sort.o $(LDLIBS) -o $@;        \
 	else                                                          \
@@ -368,7 +372,7 @@ else # SHELL32
 
 life.exe: life.o init-crt.o radix-sort.o req-binutils req-vcbtools
 ifeq ($(INCLUDE_RADIX),maybe)
-	@if [ $$(gcc -Q --help=target -march=native | grep -F adx | grep -Fq enabled) ]; then \
+	@if gcc -Q --help=target -march=native | grep -F adx | grep -Fq enabled; then \
 		echo "ld $(LDFLAGS) life.o init-crt.o radix-sort.o $(LDLIBS) -o $@"; \
 		ld $(LDFLAGS) life.o init-crt.o radix-sort.o $(LDLIBS) -o $@;        \
 	else                                                                     \

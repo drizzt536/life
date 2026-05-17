@@ -312,7 +312,7 @@ static void _give_summary(const bool returns)
 		SetClipboardData(CF_TEXT, windows_fuckass_bullshit_global_memory_handle_nonsense);
 
 		// The OS does these anyway, so skip them and reduce the DLL requirements.
-		// technically, releasing the mutex is different from abandoning it, but 
+		// technically, releasing the mutex is different from abandoning it, but
 		// the other threads don't distinguish between them, so it doesn't matter.
 		// CloseClipboard();
 		// ReleaseMutex(mutex);

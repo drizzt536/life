@@ -24,7 +24,7 @@ if ($mode -gt 3) {
 }
 
 if ($mode -eq 0) {
-	write-host "usage: build-all [--mode MODE]"
+	write-host "usage: build [--mode MODE]"
 	write-host "mode bit 0: build bit"
 	write-host "mode bit 1: benchmark bit"
 	write-host "mode 0 is help, and mode 3 both builds and benchmarks"
@@ -70,7 +70,7 @@ if ($mode -band 2) {
 
 		$results = @()
 		for ($i = 0; $i -lt 5; $i++) {
-			$results += @((time -f %e ./life -H nrun 10000000 > $null) 2>&1)
+			$results += @((time -f %e ./life -Hn 10000000 frun > $null) 2>&1)
 			sleep -s 1
 		}
 
